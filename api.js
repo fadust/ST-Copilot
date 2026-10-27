@@ -250,6 +250,22 @@ function buildPlotTrackerContextBlock(settings) {
     }
 }
 
+export function buildLocationAtlasContextBlock(settings) {
+    if (!settings.includeLocationAtlasContext) return '';
+    try {
+        const api = globalThis.LocationAtlas;
+        if (!api || typeof api.getActiveMapText !== 'function') return '';
+        // Full current Active Map — intentionally NOT capped by Location
+        // Atlas's 'Maximum macro characters' setting (that limit only
+        // applies to the {{LocationAtlas}} roleplay-prompt macro).
+        const mapText = String(api.getActiveMapText() || '').trim();
+        if (!mapText) return '';
+        return `<location_atlas>\nThis is the current active location of the roleplay context, tracking its sub-areas, furnishings, furniture, and objects. Use these as reference, but still infer to the <roleplay_context> for full accuracy checks.\n\n${mapText}\n</location_atlas>`;
+    } catch (_) {
+        return '';
+    }
+}
+
 export function buildSummaryceptionContextBlock(settings) {
     if (!settings.includeSummaryceptionSnippets) return '';
     const macro = '{{summaryception_memory}}';
@@ -289,6 +305,10 @@ export async function assembleMessages(session, settings, pendingUserText, pendi
     const plotTrackerBlock = buildPlotTrackerContextBlock(settings);
     if (plotTrackerBlock) {
         messages.push({ role: 'user', content: plotTrackerBlock });
+    }
+    const locationAtlasBlock = buildLocationAtlasContextBlock(settings);
+    if (locationAtlasBlock) {
+        messages.push({ role: 'user', content: locationAtlasBlock });
     }
     const summaryceptionBlock = buildSummaryceptionContextBlock(settings);
     if (summaryceptionBlock) {
@@ -625,6 +645,8 @@ let label = (LABELS[displayRole] || displayRole) + (idx > 0? ` #${idx}`: '');
 // classify only structural opening tags that begin a line.
 if (displayRole === 'user' && /^<plot_tracker>\r?$/m.test(raw)) {
 label = 'Plot Tracker' + (idx > 0? ` #${idx}`: '');
+} else if (displayRole === 'user' && /^<location_atlas>\r?$/m.test(raw)) {
+label = 'Location Atlas' + (idx > 0? ` #${idx}`: '');
 } else if (displayRole === 'user' && /^<summaryception_snippets>\r?$/m.test(raw)) {
 label = 'Summaryception Snippets' + (idx > 0? ` #${idx}`: '');
 } else if (displayRole === 'user' && /^<roleplay_context(?:\s[^>]*)?>\r?$/m.test(raw)) {

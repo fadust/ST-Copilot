@@ -170,6 +170,7 @@ export function syncOverlayUI(key, val) {
         includeSystemPrompt: 'scp-sp-include-sysprompt',
         includeUserPersonality: 'scp-sp-include-persona',
         includePlotTrackerContext: 'scp-sp-include-plot-tracker',
+        includeLocationAtlasContext: 'scp-sp-include-location-atlas',
         includeSummaryceptionSnippets: 'scp-sp-include-summaryception',
         applyRegexToContext: 'scp-sp-apply-regex',
         includeInlineSummaryOriginals: 'scp-sp-inline-summary-originals',
@@ -221,6 +222,7 @@ export function syncOverlayUI(key, val) {
         includeSystemPrompt: 'scp-sp-ov-include-sysprompt',
         includeUserPersonality: 'scp-sp-ov-include-persona',
         includePlotTrackerContext: 'scp-sp-ov-include-plot-tracker',
+        includeLocationAtlasContext: 'scp-sp-ov-include-location-atlas',
         includeSummaryceptionSnippets: 'scp-sp-ov-include-summaryception',
         applyRegexToContext: 'scp-sp-ov-apply-regex',
         includeInlineSummaryOriginals: 'scp-sp-ov-inline-summary-originals',
@@ -281,6 +283,7 @@ export function updateSettingsUI() {
     setC('scp-include-sysprompt', 'includeSystemPrompt');
     setC('scp-include-persona', 'includeUserPersonality');
     setC('scp-include-plot-tracker', 'includePlotTrackerContext');
+    setC('scp-include-location-atlas', 'includeLocationAtlasContext');
     setC('scp-include-summaryception', 'includeSummaryceptionSnippets');
     setC('scp-apply-regex', 'applyRegexToContext');
     setC('scp-inline-summary-originals', 'includeInlineSummaryOriginals');
@@ -432,6 +435,7 @@ export function setupSettingsHandlers() {
     bindCheck('scp-include-sysprompt', 'includeSystemPrompt', updCtx);
     bindCheck('scp-include-persona', 'includeUserPersonality', updCtx);
     bindCheck('scp-include-plot-tracker', 'includePlotTrackerContext', updCtx);
+    bindCheck('scp-include-location-atlas', 'includeLocationAtlasContext', updCtx);
     bindCheck('scp-include-summaryception', 'includeSummaryceptionSnippets', updCtx);
     bindCheck('scp-apply-regex', 'applyRegexToContext');
     bindCheck('scp-inline-summary-originals', 'includeInlineSummaryOriginals', updCtx);
@@ -654,6 +658,7 @@ export function setupSettingsHandlers() {
             connectionSource: 'default', connectionProfileId: '',
             maxTokens: 8200,
             includePlotTrackerContext: false,
+            includeLocationAtlasContext: false,
             includeSummaryceptionSnippets: false,
         };
         saveSettings(); refreshProfilesDropdown();
@@ -1008,6 +1013,7 @@ export function syncSPFromSettings() {
     gC('scp-sp-include-sysprompt', s.includeSystemPrompt);
     gC('scp-sp-include-persona', s.includeUserPersonality);
     gC('scp-sp-include-plot-tracker', s.includePlotTrackerContext);
+    gC('scp-sp-include-location-atlas', s.includeLocationAtlasContext);
     gC('scp-sp-include-summaryception', s.includeSummaryceptionSnippets);
     gC('scp-sp-apply-regex', s.applyRegexToContext);
     gC('scp-sp-inline-summary-originals', s.includeInlineSummaryOriginals);
@@ -1065,6 +1071,7 @@ export function syncSPFromSettings() {
     gC('scp-sp-ov-include-sysprompt', eff.includeSystemPrompt);
     gC('scp-sp-ov-include-persona', eff.includeUserPersonality);
     gC('scp-sp-ov-include-plot-tracker', eff.includePlotTrackerContext);
+    gC('scp-sp-ov-include-location-atlas', eff.includeLocationAtlasContext);
     gC('scp-sp-ov-include-summaryception', eff.includeSummaryceptionSnippets);
     gC('scp-sp-ov-apply-regex', eff.applyRegexToContext);
     gC('scp-sp-ov-inline-summary-originals', eff.includeInlineSummaryOriginals);
@@ -1159,7 +1166,7 @@ export function refreshSPProfilesDropdown() {
     const sel = document.getElementById('scp-sp-profile-select'); if (!sel) return;
     const s = getSettings();
     if (!Object.keys(s.profiles).length) {
-        s.profiles['Default'] = { systemPrompt: DEFAULT_SYSTEM_PROMPT, includeSystemPrompt: true, includeAuthorsNote: true, includeCharacterCard: true, includeUserPersonality: true, contextDepth: 15, localHistoryLimit: 50, connectionSource: 'default', connectionProfileId: '', maxTokens: 8200, includePlotTrackerContext: false, includeSummaryceptionSnippets: false, applyRegexToContext: true, includeInlineSummaryOriginals: false };
+        s.profiles['Default'] = { systemPrompt: DEFAULT_SYSTEM_PROMPT, includeSystemPrompt: true, includeAuthorsNote: true, includeCharacterCard: true, includeUserPersonality: true, contextDepth: 15, localHistoryLimit: 50, connectionSource: 'default', connectionProfileId: '', maxTokens: 8200, includePlotTrackerContext: false, includeLocationAtlasContext: false, includeSummaryceptionSnippets: false, applyRegexToContext: true, includeInlineSummaryOriginals: false };
         s.activeProfile = 'Default'; saveSettings();
     }
     sel.innerHTML = '';
@@ -1225,6 +1232,7 @@ export function setupSettingsPanelListeners() {
             includeAuthorsNote:'scp-include-anote', includeCharacterCard:'scp-include-charcard',
             includeUserPersonality:'scp-include-persona', reasoningTrimStrings:'scp-reasoning-trim',
             includePlotTrackerContext:'scp-include-plot-tracker',
+            includeLocationAtlasContext:'scp-include-location-atlas',
             includeSummaryceptionSnippets:'scp-include-summaryception',
             systemPrompt:'scp-sysprompt', lorebookManagePrompt:'scp-lb-manage-prompt',
             lorebookSTScanDepth:'scp-lb-st-scan-depth', lorebookCopilotScanDepth:'scp-lb-copilot-scan-depth',
@@ -1367,6 +1375,7 @@ export function setupSettingsPanelListeners() {
     bGCheck('scp-sp-include-sysprompt', 'includeSystemPrompt', () => updateMsgCount(getCurrentSession()));
     bGCheck('scp-sp-include-persona', 'includeUserPersonality', () => updateMsgCount(getCurrentSession()));
     bGCheck('scp-sp-include-plot-tracker', 'includePlotTrackerContext', () => updateMsgCount(getCurrentSession()));
+    bGCheck('scp-sp-include-location-atlas', 'includeLocationAtlasContext', () => updateMsgCount(getCurrentSession()));
     bGCheck('scp-sp-include-summaryception', 'includeSummaryceptionSnippets', () => updateMsgCount(getCurrentSession()));
     bGCheck('scp-sp-apply-regex', 'applyRegexToContext');
     bGCheck('scp-sp-inline-summary-originals', 'includeInlineSummaryOriginals', () => updateMsgCount(getCurrentSession()));
@@ -1531,7 +1540,7 @@ export function setupSettingsPanelListeners() {
         const name = await showCustomDialog({ type: 'prompt', title: 'New Configuration', message: 'Name:', placeholder: 'New Config' });
         if (!name?.trim()) return;
         const n = name.trim(); const s = getSettings();
-        s.profiles[n] = { systemPrompt: DEFAULT_SYSTEM_PROMPT, includeSystemPrompt: true, includeAuthorsNote: true, includeCharacterCard: true, includeUserPersonality: true, contextDepth: 15, localHistoryLimit: 50, connectionSource: 'default', connectionProfileId: '', maxTokens: 8200, includePlotTrackerContext: false, includeSummaryceptionSnippets: false, applyRegexToContext: true, includeInlineSummaryOriginals: false };
+        s.profiles[n] = { systemPrompt: DEFAULT_SYSTEM_PROMPT, includeSystemPrompt: true, includeAuthorsNote: true, includeCharacterCard: true, includeUserPersonality: true, contextDepth: 15, localHistoryLimit: 50, connectionSource: 'default', connectionProfileId: '', maxTokens: 8200, includePlotTrackerContext: false, includeLocationAtlasContext: false, includeSummaryceptionSnippets: false, applyRegexToContext: true, includeInlineSummaryOriginals: false };
         saveSettings(); refreshSPProfilesDropdown(); refreshProfilesDropdown();
         loadProfile(n); syncSPFromSettings(); updateSettingsUI();
         const sel = document.getElementById('scp-sp-profile-select'); if (sel) sel.value = n;
@@ -1783,6 +1792,7 @@ export function setupSettingsPanelListeners() {
     bindOvCheck('scp-sp-ov-include-sysprompt', 'includeSystemPrompt');
     bindOvCheck('scp-sp-ov-include-persona', 'includeUserPersonality');
     bindOvCheck('scp-sp-ov-include-plot-tracker', 'includePlotTrackerContext');
+    bindOvCheck('scp-sp-ov-include-location-atlas', 'includeLocationAtlasContext');
     bindOvCheck('scp-sp-ov-include-summaryception', 'includeSummaryceptionSnippets');
     bindOvCheck('scp-sp-ov-apply-regex', 'applyRegexToContext');
     bindOvCheck('scp-sp-ov-inline-summary-originals', 'includeInlineSummaryOriginals');
@@ -1837,6 +1847,7 @@ export function setupSettingsPanelListeners() {
                 includeSystemPrompt: ['scp-sp-ov-include-sysprompt'],
                 includeUserPersonality: ['scp-sp-ov-include-persona'],
                 includePlotTrackerContext: ['scp-sp-ov-include-plot-tracker'],
+                includeLocationAtlasContext: ['scp-sp-ov-include-location-atlas'],
                 includeSummaryceptionSnippets: ['scp-sp-ov-include-summaryception'],
                 applyRegexToContext: ['scp-sp-ov-apply-regex'],
                 includeInlineSummaryOriginals: ['scp-sp-ov-inline-summary-originals'],
