@@ -5,7 +5,7 @@ globalThis.window = { addEventListener() {} };
 globalThis.SillyTavern = { getContext: () => ({ chat: [], extensionSettings: {} }) };
 globalThis.fetch = () => assert.fail('Building Copilot context should not make a network request');
 
-const { buildDirectorContextBlock } = await import('../features/feature-director-context.js');
+const { buildDirectorContextBlock, DIRECTOR_ANSWER_RULES } = await import('../features/feature-director-context.js');
 const { assembleMessages, buildContextInspectorHTML } = await import('../api.js');
 
 const fixture = {
@@ -57,15 +57,40 @@ test('reads the new snapshot on every call and escapes structural tags', () => {
     assert.equal(block.match(/<\/narrator_director>/g).length, 1);
 });
 
-test('bounds the amount of Director text in a single request', () => {
-    globalThis.narratorDirector.view = () => ({ canon: Array.from({ length: 100 }, (_, index) => ({
-        fact: `Rook note ${index} ${'x'.repeat(400)}`,
-        turn: index,
-    })) });
+test('keeps all character matches and the end of a long relevant record', () => {
+    globalThis.narratorDirector.view = () => ({
+        cast: { 'Rook Flint': {} },
+        canon: [
+            ...Array.from({ length: 12 }, (_, index) => ({ fact: `Rook note ${index}.`, turn: index })),
+            { fact: `${'Earlier details. '.repeat(35)}At the end, Rook handed the book to Maris.` },
+            { fact: 'Maris did not enter the orchard.', turn: 14 },
+        ],
+    });
+    const block = buildDirectorContextBlock({}, 'What does Director know about Rook? Do not add any guesses.');
+    assert.equal(block.match(/^\d+\. /gm).length, 13);
+    assert.match(block, /Rook note 0\./);
+    assert.match(block, /At the end, Rook handed the book to Maris\./);
+    assert.doesNotMatch(block, /orchard/);
+});
+
+test('keeps orders distinct from completed actions in compound records', () => {
+    globalThis.narratorDirector.view = () => ({ canon: [
+        { fact: 'Maris found the copper tub and ordered Rook to heat water. Rook handed her the book.' },
+        { fact: 'Rook was told to close the gate.' },
+    ] });
     const block = buildDirectorContextBlock({}, 'Rook');
-    assert.ok(block.length <= 3200);
-    assert.match(block, /Rook note 99/);
-    assert.doesNotMatch(block, /Rook note 0 /);
+    assert.match(block, /Rook handed her the book\./);
+    assert.match(block, /Order or request, completion unconfirmed by this clause: “ordered Rook to heat water”/);
+    assert.match(block, /completion unconfirmed by this clause: “told to close the gate”/);
+    assert.doesNotMatch(block, /Rook heated|Rook closed/);
+});
+
+test('keeps a short recent fallback for generic questions', () => {
+    globalThis.narratorDirector.view = () => ({ canon: Array.from({ length: 9 }, (_, index) => ({ fact: `Record ${index}`, turn: index })) });
+    const block = buildDirectorContextBlock({}, 'What does Director know?');
+    assert.equal(block.match(/^\d+\. /gm).length, 4);
+    assert.match(block, /Record 8/);
+    assert.doesNotMatch(block, /Record 0/);
 });
 
 test('normal request assembly and Context Inspector use the same Director block', async () => {
@@ -73,7 +98,9 @@ test('normal request assembly and Context Inspector use the same Director block'
     const messages = await assembleMessages(session, { contextDepth: 0 }, null);
     assert.equal(messages.filter(message => message.content.startsWith('<narrator_director>')).length, 1);
     assert.match(messages[1].content, /Rook returned the gate key/);
+    assert.ok(messages[0].content.includes(DIRECTOR_ANSWER_RULES));
     assert.match(buildContextInspectorHTML(messages), /scp-ctx-nav-user[^>]*>Narrator Director/);
     const disabled = await assembleMessages(session, { includeNarratorDirectorContext: false }, 'Rook');
     assert.ok(disabled.every(message => !message.content.startsWith('<narrator_director>')));
+    assert.ok(!disabled[0].content.includes(DIRECTOR_ANSWER_RULES));
 });

@@ -35,7 +35,7 @@ import { escHtml } from './utils/util-dom.js';
 import { getUserPersona } from './utils/util-st.js';
 import { getCurrentSession, parseChatPickKey } from './session.js';
 import { applyRegexIfEnabled, buildLorebookContextBlock, buildLBAIInstructions } from './features/feature-lorebook-engine.js';
-import { buildDirectorContextBlock } from './features/feature-director-context.js';
+import { buildDirectorContextBlock, DIRECTOR_ANSWER_RULES } from './features/feature-director-context.js';
 import { buildCharacterContextBlock, buildCharEditAIInstructions, buildChatEditAIInstructions } from './features/feature-character-engine.js';
 import { mergeContent } from './features/feature-attachments.js';
 
@@ -302,7 +302,10 @@ export function _buildAiContextForHistoryMsg(msg) {
 }
 
 export async function assembleMessages(session, settings, pendingUserText, pendingAtts = null) {
-    const messages = [{ role: 'system', content: await buildSystemContent(settings) }];
+    const directorQuery = pendingUserText || session.messages?.findLast(message => message.role === 'user')?.content;
+    const directorBlock = buildDirectorContextBlock(settings, directorQuery);
+    const system = await buildSystemContent(settings);
+    const messages = [{ role: 'system', content: directorBlock ? `${system}\n\n${DIRECTOR_ANSWER_RULES}` : system }];
     const plotTrackerBlock = buildPlotTrackerContextBlock(settings);
     if (plotTrackerBlock) {
         messages.push({ role: 'user', content: plotTrackerBlock });
@@ -311,8 +314,6 @@ export async function assembleMessages(session, settings, pendingUserText, pendi
     if (locationAtlasBlock) {
         messages.push({ role: 'user', content: locationAtlasBlock });
     }
-    const directorQuery = pendingUserText || session.messages?.findLast(message => message.role === 'user')?.content;
-    const directorBlock = buildDirectorContextBlock(settings, directorQuery);
     if (directorBlock) {
         messages.push({ role: 'user', content: directorBlock });
     }
