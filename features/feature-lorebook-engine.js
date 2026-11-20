@@ -33,7 +33,7 @@ import { escHtml } from '../utils/util-dom.js';
 import { getSTWorldInfo, getSTUtils } from '../state.js';
 import { getSettings, saveSettings } from '../settings.js';
 import { getCurrentSession, addMessage, saveSessionsToMetadata, getEffectiveSettings } from '../session.js';
-import { DEFAULT_LB_MANAGE_PROMPT, LB_FORMAT_BLOCK, LB_CONFIGURE_RULES } from '../default-prompts.js';
+import { DEFAULT_LB_MANAGE_PROMPT, LB_FORMAT_BLOCK, LB_CONFIGURE_RULES, LB_CONTEXT_INSTRUCTIONS } from '../default-prompts.js';
 import { applySearchReplaceToField } from './feature-character-engine.js';
 import { recordStat, STAT } from './feature-stats.js';
 import { renderLBHistoryContent as _renderLBHistoryContent, appendLBHistoryEl as _appendLBHistoryEl } from './feature-chatedit-engine.js';
@@ -388,6 +388,28 @@ function entryTitle(entry) {
     return entry.comment?.trim() || `Entry #${entry.uid}`;
 }
 
+function knownLorebookNames(activeBooks = getActiveLorebookNames()) {
+    const storedBooks = SillyTavern.getContext().getWorldInfoNames?.() ?? getSTWorldInfo()?.world_names ?? [];
+    return [...new Set([...activeBooks, ...storedBooks])];
+}
+
+export async function readLorebookUidDirectory() {
+    try {
+        await SillyTavern.getContext().updateWorldInfoList?.();
+    } catch (error) {
+        console.warn('[ST-Copilot] Could not refresh lorebook names:', error);
+    }
+    const names = knownLorebookNames();
+    if (getEmbeddedCharBook()) names.push(EMBEDDED_BOOK_KEY);
+    return Promise.all(names.map(async name => {
+        const data = await readWorldInfoBook(name).catch(() => null);
+        return {
+            name,
+            entries: data ? wiEntriesToArray(data).map(entry => ({ uid: entry.uid, title: entryTitle(entry) })) : null,
+        };
+    }));
+}
+
 function mentionsName(text, name) {
     const literal = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return Boolean(literal) && new RegExp(`(?:^|[^\\p{L}\\p{N}_])${literal}(?=$|[^\\p{L}\\p{N}_])`, 'iu').test(text);
@@ -396,13 +418,12 @@ function mentionsName(text, name) {
 export async function buildEntryCommandContext(settings, query) {
     if (typeof query !== 'string') return '';
     const uidRequest = /\b(?:uids?|entry ids?)\b/i.test(query);
-    const settingsRequest = /\b(?:lorebook|world info|trigger|chance|probability|order|priority|depth|strategy|constant|vectorized|reorder|position)\b/i.test(query);
+    const settingsRequest = /\b(?:lorebook|world info|trigger|chance|probability|order|priority|depth|strategy|constant|vectorized|reorder|position|positioning)\b/i.test(query);
     const moveRequest = /\b(?:move|put|place)\b/i.test(query) && /\b(?:top|bottom|before|after|first|last)\b/i.test(query);
     if (!uidRequest && !(settings.lorebookAIManageEnabled && (settingsRequest || moveRequest))) return '';
 
     const activeBooks = getActiveLorebookNames();
-    const knownBooks = new Set([...activeBooks, ...(getSTWorldInfo()?.world_names || [])]);
-    const namedBooks = [...knownBooks].filter(name => mentionsName(query, name));
+    const namedBooks = knownLorebookNames(activeBooks).filter(name => mentionsName(query, name));
     const books = (namedBooks.length ? namedBooks : activeBooks).filter(name => !(settings.lorebookExcludedBooks || []).includes(name));
     const uid = query.match(/\b(?:uid|entry id)\s*[:#]?\s*(\d+)\b/i)?.[1];
     const listUids = /\b(?:uids|entry ids)\b/i.test(query);
@@ -415,9 +436,12 @@ export async function buildEntryCommandContext(settings, query) {
         const matched = records.filter(record => uid === undefined
             ? mentionsName(query, record.name) || record.entry.key?.some(key => typeof key === 'string' && !key.startsWith('/') && mentionsName(query, key))
             : Number(record.entry.uid) === Number(uid));
-        const results = matched.length || !listUids || !namedBooks.includes(name) ? matched : records;
-        const entries = results.slice(0, 30).map(record => ({
-            uid: record.entry.uid, name: record.name, ...getEntryLayout(record.entry), listPosition: record.listPosition,
+        const wholeBook = uid === undefined && namedBooks.includes(name)
+            && (listUids && (!matched.length || /\b(?:all|every)\b/i.test(query))
+                || (settingsRequest && /\breorder\b/i.test(query)));
+        const entries = (wholeBook ? records : matched).map(record => ({
+            uid: record.entry.uid, name: record.name, listPosition: record.listPosition,
+            ...(!wholeBook || matched.includes(record) ? getEntryLayout(record.entry) : {}),
         }));
         return entries.length ? { book: name, count: ordered.length, entries } : null;
     }));
@@ -426,7 +450,7 @@ export async function buildEntryCommandContext(settings, query) {
     const data = JSON.stringify(found).replaceAll('<', '\\u003c');
     const block = `<lorebook_entry_settings>\n${data}\n</lorebook_entry_settings>`;
     if (!uidRequest) return block;
-    return `Use the saved entry records below to answer UID questions. Give the lorebook name with each UID. For an empty result, say no matching entry was found and ask for the book or title. A read-only UID request needs no edit proposal.\n\n${block}`;
+    return `${LB_CONTEXT_INSTRUCTIONS}\nGive the lorebook name with each UID. For an empty result, say no matching entry was found and ask for the book or title.\n\n${block}`;
 }
 
 export function keywordMatchEntry(keys, text) {

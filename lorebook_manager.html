@@ -12,6 +12,7 @@
                 </div>
             </div>
             <div class="scp-lb-header-right">
+                <button type="button" class="scp-lb-bulk-btn" id="scp-lb-open-uids" aria-controls="scp-lb-uid-directory" aria-expanded="false">UID directory</button>
                 <button class="scp-hbtn scp-hbtn-close" id="scp-lb-close">${I.x}</button>
             </div>
         </div>
@@ -60,6 +61,18 @@
                     <span class="scp-lb-ctx-legend-item"><span class="scp-lb-ind-demo"></span>Default</span>
                 </div>
                 <div class="scp-lb-entries-container">
+                    <section class="scp-lb-entry-detail scp-lb-uid-directory" id="scp-lb-uid-directory" aria-labelledby="scp-lb-uid-heading" hidden>
+                        <div class="scp-lb-detail-header">
+                            <button type="button" class="scp-lb-back-btn" id="scp-lb-uids-back">← Back</button>
+                            <span class="scp-lb-detail-title" id="scp-lb-uid-heading">Entry UIDs</span>
+                            <button type="button" class="scp-lb-detail-btn" id="scp-lb-uids-copy" disabled>${I.copy} Copy list</button>
+                        </div>
+                        <div class="scp-lb-uids-toolbar">
+                            <select class="scp-lb-detail-input" id="scp-lb-uids-book" aria-label="Filter UIDs by lorebook" disabled></select>
+                            <span id="scp-lb-uids-count" role="status"></span>
+                        </div>
+                        <div class="scp-lb-detail-body scp-lb-uids-results" id="scp-lb-uids-results"></div>
+                    </section>
                     <div class="scp-lb-entries" id="scp-lb-entries">
                         <div class="scp-lb-empty-state"><div class="scp-empty-icon">${I.book}</div><div>Select a lorebook to view its entries</div></div>
                     </div>

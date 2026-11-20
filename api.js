@@ -30,7 +30,7 @@
  */
 
 import { EXT_DISPLAY } from './constants.js';
-import { DEFAULT_SYSTEM_PROMPT } from './default-prompts.js';
+import { DEFAULT_SYSTEM_PROMPT, LB_CONTEXT_INSTRUCTIONS } from './default-prompts.js';
 import { escHtml } from './utils/util-dom.js';
 import { getUserPersona } from './utils/util-st.js';
 import { getCurrentSession, parseChatPickKey } from './session.js';
@@ -761,6 +761,7 @@ export function registerHtmlBlock(code) {
 export function getHtmlBlock(id) { return _htmlBlockRegistry.get(id); }
 
 const jsonProposalTags = ['lorebook-changes', 'chat-changes', 'character-create'];
+const unexpectedLorebookCall = /<[|｜]DSML[|｜]\s*invoke\s+name\s*=\s*["']lorebook_entry_settings(?:["']|$)/i;
 
 function findUnfinishedProposal(text) {
     let open = null;
@@ -904,20 +905,41 @@ export async function callGenerate(session, settings, pendingText, onChunk) {
     }
 
     const recoverProposal = useStream && !pendingText;
+    const recoverLorebookCall = !pendingText && (settings.lorebookAIManageEnabled
+        || messages[0].content.includes('<lorebook_entry_settings>'));
     const abort = new AbortController();
+    const initialStream = recoverLorebookCall && useStream ? new AbortController() : null;
     _abortController = abort;
 
-    const send = (requestMessages, stream) => service.sendRequest(profileId, requestMessages, maxTokens, {
+    const send = (requestMessages, stream, signal = abort.signal) => service.sendRequest(profileId, requestMessages, maxTokens, {
         stream,
-        signal: abort.signal,
+        signal,
         extractData: stream,
         includePreset: true,
     });
 
     try {
-        const response = await send(messages, useStream);
-        const result = await readCompletion(response, abort.signal, onChunk, recoverProposal);
+        const signal = initialStream ? AbortSignal.any([abort.signal, initialStream.signal]) : abort.signal;
+        const response = await send(messages, useStream, signal);
+        const result = await readCompletion(response, signal, onChunk, { recoverProposal, recoverLorebookCall });
         if (!result || abort.signal.aborted) return null;
+
+        if (recoverLorebookCall && unexpectedLorebookCall.test(result.text || result.reasoning || '')) {
+            initialStream?.abort();
+            try {
+                const retryMessages = [
+                    { ...messages[0], content: `${messages[0].content}\n\nThe previous attempt emitted unsupported tool markup. ${LB_CONTEXT_INSTRUCTIONS}` },
+                    ...messages.slice(1),
+                ];
+                const retry = await readCompletion(await send(retryMessages, false), abort.signal);
+                if (!retry || abort.signal.aborted) return null;
+                if (retry.text && !unexpectedLorebookCall.test(retry.text) && !findUnfinishedProposal(retry.text)) return retry;
+            } catch (error) {
+                if (isStopped(error, abort.signal)) return null;
+                console.warn('[ST-Copilot] Could not recover the lorebook lookup reply:', error);
+            }
+            return { text: 'The model stopped during a lorebook lookup. Send the request again to retry.', reasoning: null, isMaxTokens: false };
+        }
 
         const proposal = recoverProposal && findUnfinishedProposal(result.text);
         if (!proposal) return result;
@@ -954,7 +976,7 @@ export async function callGenerate(session, settings, pendingText, onChunk) {
     }
 }
 
-async function readCompletion(response, signal, onChunk, keepIncompleteProposal = false) {
+async function readCompletion(response, signal, onChunk, { recoverProposal = false, recoverLorebookCall = false } = {}) {
     let text = '';
     let reasoning = null;
     let reasoningStartMs = null;
@@ -1013,6 +1035,7 @@ async function readCompletion(response, signal, onChunk, keepIncompleteProposal 
 
             const ext = deepExtract(value);
             if (ext.t) text = ext.t;
+            if (recoverLorebookCall && unexpectedLorebookCall.test(text)) break;
             const newReasoning = ext.r;
 
             if (newReasoning) {
@@ -1030,7 +1053,8 @@ async function readCompletion(response, signal, onChunk, keepIncompleteProposal 
         }
     } catch (error) {
         if (isStopped(error, signal)) return null;
-        if (!keepIncompleteProposal || !findUnfinishedProposal(text)) throw error;
+        if (!(recoverProposal && findUnfinishedProposal(text))
+            && !(recoverLorebookCall && !text.trim() && unexpectedLorebookCall.test(reasoning || ''))) throw error;
     }
 
     return { text: text.trim(), reasoning, isMaxTokens: reachedTokenLimit(finishReason) };

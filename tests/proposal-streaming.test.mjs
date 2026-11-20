@@ -8,7 +8,7 @@ const { parseLBChangesFromText } = await import('../features/feature-lorebook-en
 const lorebookBlock = '```lorebook-changes\n{"changes":[{"action":"add","worldName":"Cast","name":"Rook","content":"Returns the key."}]}\n```';
 const partial = 'I’ll add the key handoff.\n\n' + lorebookBlock.slice(0, -21);
 
-function generate(sendRequest, onChunk) {
+function generate(sendRequest, onChunk, settings = {}) {
     const profile = { id: 'fixture', api: 'openai', model: 'fixture' };
     globalThis.SillyTavern = { getContext: () => ({
         chat: [],
@@ -19,7 +19,7 @@ function generate(sendRequest, onChunk) {
         },
     }) };
     const session = { messages: [{ role: 'user', content: 'Record Rook’s key handoff in Cast.' }] };
-    return callGenerate(session, { forceStreaming: 'on' }, null, onChunk);
+    return callGenerate(session, { forceStreaming: 'on', ...settings }, null, onChunk);
 }
 
 test('empty terminal packets preserve streamed text and finish reason', async () => {
@@ -104,4 +104,50 @@ test('Stop leaves a partial stream without submitting a repair', async () => {
     }, () => abortGeneration());
     assert.equal(result, null);
     assert.equal(calls, 1);
+});
+
+const leakedLookup = '<｜DSML｜ calls>\n<｜DSML｜ invoke name="lorebook_entry_settings">\n\n</｜DSML｜ invoke>\n</｜DSML｜ calls>';
+
+test('a visible DSML lookup cancels the first stream and restarts once without forwarding the markup', async () => {
+    let streamSignal;
+    let requestedNextChunk = false;
+    const chunks = [];
+    let calls = 0;
+    const result = await generate((profile, messages, maxTokens, { stream, signal }) => {
+        calls++;
+        assert.match(messages[0].content, /No callable lorebook tools are available/);
+        if (stream) {
+            streamSignal = signal;
+            return async function* () {
+                yield { text: leakedLookup };
+                requestedNextChunk = true;
+                throw new Error('The stream stalls here');
+            };
+        }
+        assert.ok(streamSignal.aborted);
+        assert.ok(!signal.aborted);
+        assert.match(messages[0].content, /previous attempt emitted unsupported tool markup/);
+        assert.equal(messages.at(-1).content, 'Record Rook’s key handoff in Cast.');
+        assert.ok(messages.every(message => !message.content.includes('DSML')));
+        return { content: lorebookBlock };
+    }, text => chunks.push(text), { lorebookAIManageEnabled: true });
+    assert.equal(calls, 2);
+    assert.equal(requestedNextChunk, false);
+    assert.equal(chunks.length, 0);
+    assert.equal(parseLBChangesFromText(result.text)[0].name, 'Rook');
+});
+
+test('a reasoning-only lookup can recover but a second invalid reply produces a clear message', async () => {
+    let calls = 0;
+    const result = await generate((profile, messages, maxTokens, { stream }) => {
+        calls++;
+        return stream ? async function* () {
+            yield { state: { reasoning: leakedLookup } };
+            throw new Error('Connection closed before an answer');
+        } : { text: leakedLookup };
+    }, undefined, { lorebookAIManageEnabled: true });
+    assert.equal(calls, 2);
+    assert.match(result.text, /model stopped during a lorebook lookup/);
+    assert.doesNotMatch(result.text, /DSML/);
+    assert.equal(parseLBChangesFromText(result.text), null);
 });

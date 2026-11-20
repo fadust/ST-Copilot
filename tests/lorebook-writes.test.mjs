@@ -28,10 +28,10 @@ globalThis.fetch = async (path, { body }) => {
     return Response.json(books.get(name) ?? { entries: {} });
 };
 
-const { applyLBChanges, buildEntryCommandContext, clearWiCache, fetchWorldInfoBook, parseLBChangesFromText } = await import('../features/feature-lorebook-engine.js');
+const { applyLBChanges, buildEntryCommandContext, clearWiCache, fetchWorldInfoBook, parseLBChangesFromText, readLorebookUidDirectory } = await import('../features/feature-lorebook-engine.js');
 const { assembleMessages } = await import('../api.js');
 const { setSTWorldInfo } = await import('../state.js');
-setSTWorldInfo({ selected_world_info: ['Cast', 'Other'], worldInfoCache: nativeCache });
+setSTWorldInfo({ selected_world_info: ['Cast', 'Other'], world_names: ['Archive'], worldInfoCache: nativeCache });
 
 const add = { worldName: 'Cast', name: 'Rook', action: 'add', content: 'First draft.' };
 const edit = { worldName: 'Cast', name: 'Rook', action: 'edit', content: 'Final draft.' };
@@ -197,5 +197,21 @@ test('duplicate titles in the same book and mismatched explicit UIDs cannot be a
     assert.equal((await applyLBChanges([unresolved])).size, 0);
     assert.match(failures[0], /8, 18/);
     assert.equal((await applyLBChanges([{ ...configure, uid: 80 }])).size, 0);
+    assert.deepEqual(writes, []);
+});
+
+test('the UID directory and named-book context cover all saved entries beyond the old 30-entry limit', async () => {
+    const entries = Array.from({ length: 75 }, (_, uid) => ({ uid, comment: `Resident ${uid}`, content: 'Fixture lore' }));
+    books.set('Archive', { entries: Object.fromEntries(entries.map(entry => [entry.uid, entry])) });
+    const directory = await readLorebookUidDirectory();
+    assert.deepEqual(directory.find(group => group.name === 'Archive').entries, entries.map(({ uid, comment }) => ({ uid, title: comment })));
+    for (const query of ['List all UIDs in Archive.', 'Reorder Archive and move Resident 74 to the top.']) {
+        const result = await buildEntryCommandContext({ lorebookAIManageEnabled: true }, query);
+        const [archive] = JSON.parse(result.match(/<lorebook_entry_settings>\n(.*)\n<\/lorebook_entry_settings>/)[1]);
+        assert.equal(archive.entries.length, 75);
+        assert.equal(archive.entries[74].uid, 74);
+        assert.equal(archive.entries[74].listPosition, 75);
+        assert.doesNotMatch(result, /Fixture lore/);
+    }
     assert.deepEqual(writes, []);
 });

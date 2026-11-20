@@ -35,6 +35,7 @@ import {
     logLBHistoryChanges, applyLBChanges, getWiCache as _getWiCache,
     clearWiCache, getLastActiveEntries as _getLastActiveEntries,
     getEntryLayout, updateEntryLayout, setEntryField,
+    readLorebookUidDirectory,
 } from './feature-lorebook-engine.js';
 import { openDiffModal, reconstructLBChangesBlock } from './feature-chatedit-engine.js';
 import { updateMsgCount as _updateMsgCount } from '../ui/ui-chat.js';
@@ -50,6 +51,8 @@ let _lbActiveBook = null;
 let _lbSearchQuery = '';
 let _lbEntryDetailEntry = null;
 let _lbEntryDetailBook = null;
+let _lbUidBooks = [];
+let _lbUidRequest = null;
 
 // Exported so ui-settings.js's LB toggle handlers (which need to refresh
 // the currently-open lorebook entry list after a setting change) can read
@@ -727,7 +730,79 @@ export async function openLorebookManager() {
     if (_lbActiveBook) await renderEntryList(_lbActiveBook, _lbSearchQuery).catch(() => {});
 }
 
+function getUidDirectoryGroups() {
+    const book = document.getElementById('scp-lb-uids-book').value;
+    const query = document.getElementById('scp-lb-search').value.trim().toLowerCase();
+    const uid = /^(?:uid\s*[:#]?\s*|#)?(\d+)$/.exec(query)?.[1];
+    return _lbUidBooks.filter(group => !book || group.name === book).flatMap(group => {
+        if (!query || !group.entries || getDisplayName(group.name).toLowerCase().includes(query)) return [group];
+        const entries = group.entries.filter(entry => uid === undefined
+            ? entry.title.toLowerCase().includes(query) : Number(entry.uid) === Number(uid));
+        return entries.length ? [{ ...group, entries }] : [];
+    });
+}
+
+function renderUidDirectory() {
+    if (_lbUidRequest) return;
+    const groups = getUidDirectoryGroups();
+    const count = groups.reduce((total, group) => total + (group.entries?.length ?? 0), 0);
+    document.getElementById('scp-lb-uids-count').textContent = `${count} ${count === 1 ? 'entry' : 'entries'}`;
+    document.getElementById('scp-lb-uids-copy').disabled = !count;
+    document.getElementById('scp-lb-uids-results').innerHTML = groups.map(({ name, entries }) => {
+        const title = escHtml(getDisplayName(name));
+        if (!entries?.length) return `<div class="scp-lb-empty-state">${title} — ${entries ? 'No entries' : 'Could not read lorebook'}</div>`;
+        return `<table class="scp-lb-uid-table">
+            <caption>${title}</caption>
+            <thead><tr><th scope="col">UID</th><th scope="col">Entry</th></tr></thead>
+            <tbody>${entries.map(entry => `<tr><td>${escHtml(String(entry.uid))}</td><td>${escHtml(entry.title)}</td></tr>`).join('')}</tbody>
+        </table>`;
+    }).join('') || '<div class="scp-lb-empty-state">No matching entries.</div>';
+}
+
+export async function openLorebookUidDirectory(book = '') {
+    const directory = document.getElementById('scp-lb-uid-directory');
+    if (!directory) return;
+    const overlay = document.getElementById('scp-lb-overlay');
+    if (overlay.style.display === 'none') await openLorebookManager();
+    directory.hidden = false;
+    document.getElementById('scp-lb-open-uids').setAttribute('aria-expanded', 'true');
+    document.getElementById('scp-lb-entries').inert = true;
+    document.getElementById('scp-lb-entry-detail').inert = true;
+    document.getElementById('scp-lb-search').value = '';
+    document.getElementById('scp-lb-uids-count').textContent = 'Reading lorebooks…';
+    document.getElementById('scp-lb-uids-results').replaceChildren();
+    document.getElementById('scp-lb-uids-copy').disabled = true;
+    document.getElementById('scp-lb-uids-back').focus();
+
+    const select = document.getElementById('scp-lb-uids-book');
+    select.disabled = true;
+    const request = readLorebookUidDirectory();
+    _lbUidRequest = request;
+    const books = await request;
+    if (_lbUidRequest !== request || directory.hidden) return;
+    _lbUidRequest = null;
+    _lbUidBooks = books;
+    select.replaceChildren(new Option('All lorebooks', ''), ...books.map(group => new Option(getDisplayName(group.name), group.name)));
+    const match = books.find(group => getDisplayName(group.name).toLowerCase() === book.toLowerCase());
+    select.value = match?.name || '';
+    select.disabled = false;
+    if (book && !match) toastr.warning(`Lorebook "${book}" was not found. Showing all lorebooks.`, EXT_DISPLAY, { escapeHtml: true });
+    renderUidDirectory();
+}
+
+function closeUidDirectory() {
+    const directory = document.getElementById('scp-lb-uid-directory');
+    if (!directory || directory.hidden) return;
+    directory.hidden = true;
+    _lbUidRequest = null;
+    document.getElementById('scp-lb-open-uids').setAttribute('aria-expanded', 'false');
+    document.getElementById('scp-lb-entries').inert = false;
+    document.getElementById('scp-lb-entry-detail').inert = false;
+    document.getElementById('scp-lb-search').value = _lbSearchQuery;
+}
+
 export function closeLorebookManager() {
+    closeUidDirectory();
     document.getElementById('scp-lb-overlay').style.display = 'none';
 }
 
@@ -834,6 +909,7 @@ export async function toggleLorebookSelection(name) {
 }
 
 export async function viewLorebookEntries(name) {
+    closeUidDirectory();
     _lbActiveBook = name;
     document.querySelectorAll('.scp-lb-book-item').forEach(el => el.classList.toggle('lb-book-open', el.dataset.name === name));
     document.getElementById('scp-lb-main-actions').style.display = '';
@@ -1154,6 +1230,19 @@ export function updateLBFooterInfo() {
 
 export function setupLorebookManagerListeners() {
     document.getElementById('scp-lb-close')?.addEventListener('click', closeLorebookManager);
+    document.getElementById('scp-lb-open-uids')?.addEventListener('click', () => openLorebookUidDirectory());
+    document.getElementById('scp-lb-uids-back')?.addEventListener('click', () => {
+        closeUidDirectory();
+        document.getElementById('scp-lb-open-uids').focus();
+    });
+    document.getElementById('scp-lb-uids-book')?.addEventListener('change', renderUidDirectory);
+    document.getElementById('scp-lb-uids-copy')?.addEventListener('click', () => {
+        const text = getUidDirectoryGroups().filter(group => group.entries?.length).map(group => [
+            getDisplayName(group.name), 'UID\tEntry',
+            ...group.entries.map(entry => `${entry.uid}\t${entry.title}`),
+        ].join('\n')).join('\n\n');
+        if (text) copyText(text);
+    });
     const lbOverlay = document.getElementById('scp-lb-overlay');
     if (lbOverlay) {
         let _lbOverlayTouchStart = null;
@@ -1182,6 +1271,10 @@ export function setupLorebookManagerListeners() {
     diffModal?.addEventListener('mousedown', e => { _diffMouseDown = e.target; });
     diffModal?.addEventListener('click', e => { if (e.target === diffModal && _diffMouseDown === diffModal) diffModal.style.display = 'none'; });
     document.getElementById('scp-lb-refresh')?.addEventListener('click', async () => {
+        if (!document.getElementById('scp-lb-uid-directory')?.hidden) {
+            await openLorebookUidDirectory(document.getElementById('scp-lb-uids-book').value);
+            return;
+        }
         clearWiCache();
         await refreshLorebookList();
         if (_lbActiveBook) await renderEntryList(_lbActiveBook, _lbSearchQuery);
@@ -1189,6 +1282,10 @@ export function setupLorebookManagerListeners() {
 
     let _lbSearchTid = null;
     document.getElementById('scp-lb-search')?.addEventListener('input', e => {
+        if (!document.getElementById('scp-lb-uid-directory')?.hidden) {
+            renderUidDirectory();
+            return;
+        }
         _lbSearchQuery = e.target.value;
         clearTimeout(_lbSearchTid);
         _lbSearchTid = setTimeout(() => { if (_lbActiveBook) renderEntryList(_lbActiveBook, _lbSearchQuery); }, 200);

@@ -84,7 +84,7 @@ import {
     renderLBHistoryContent, appendLBHistoryEl, parseChatChangesFromText,
     stripChatChangesBlock, renderChatProposalCard,
 } from '../features/feature-chatedit-engine.js';
-import { renderProposalCard } from '../features/feature-lorebook-ui.js';
+import { openLorebookUidDirectory, renderProposalCard } from '../features/feature-lorebook-ui.js';
 import {
     getPendingAttachments, clearPendingAttachments, processAttachmentsBeforeSend,
     renderAttachmentPreviews, _openImageLightbox, _openTextLightbox,
@@ -2012,6 +2012,12 @@ export async function handleSend() {
     if (!rawText && !getPendingAttachments().length || _generating) return;
     const text = expandMacros(rawText || '');
     input.value = ''; autoResize(input);
+    const uidDirectory = /^\/uids(?:[ \t]+(.+))?$/i.exec(text)
+        || /^(?:please\s+)?(?:show(?: me)?|list|view|display)\s+(?:all\s+)?(?:lorebook\s+)?(?:entry\s+)?(?:uids|entry ids)(?:\s+(?:in|for|of)\s+(.+?))?[.!?]?$/i.exec(text);
+    if (uidDirectory && !getPendingAttachments().length) {
+        await openLorebookUidDirectory((uidDirectory[1] || '').trim().replace(/^["“]|["”]$/g, ''));
+        return;
+    }
     
     const processedAtts = await processAttachmentsBeforeSend(getPendingAttachments(), false);
     clearPendingAttachments();
