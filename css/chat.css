@@ -237,7 +237,7 @@ details.scp-reasoning-block[open] .scp-reasoning-summary::before { transform: ro
 .scp-reasoning-summary:hover { opacity: 1; }
 .scp-reasoning-content {
     padding: 8px 12px;
-    font-size: 12px;
+    font-size: calc(var(--scp-chat-font-size, 13px) - 1px);
     color: var(--scp-text-muted);
     border-top: 1px solid var(--scp-accent-dim);
     max-height: 260px;

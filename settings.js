@@ -12,6 +12,8 @@ import { EXT_NAME, THEME_PRESETS } from './constants.js';
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_LB_MANAGE_PROMPT } from './default-prompts.js';
 import { dbgDiffSettings } from './utils/util-debug.js';
 
+export const DEFAULT_CHAT_FONT_SIZE = 13;
+
 export function getSettings() {
     const { extensionSettings } = SillyTavern.getContext();
     if (!extensionSettings[EXT_NAME]) extensionSettings[EXT_NAME] = {};
@@ -25,6 +27,7 @@ export function getSettings() {
         iconX: null, iconY: null,
         windowW: 440, windowH: 600,
         opacity: 95,
+        chatFontSize: DEFAULT_CHAT_FONT_SIZE,
         hotkey: 'Alt+Shift+C',
         hotkeyEnabled: true,
         searchHotkey: 'Ctrl+F',

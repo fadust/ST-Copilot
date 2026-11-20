@@ -43,13 +43,13 @@
 
 import { EXT_DISPLAY, THEME_PRESETS } from '../constants.js';
 import { DEFAULT_CHAR_EDIT_DIRECTIVE, DEFAULT_CHAT_EDIT_DIRECTIVE, DEFAULT_LB_MANAGE_PROMPT, DEFAULT_SYSTEM_PROMPT } from '../default-prompts.js';
-import { getSettings, saveSettings } from '../settings.js';
+import { DEFAULT_CHAT_FONT_SIZE, getSettings, saveSettings } from '../settings.js';
 import {
     clearAllSessionOverrides, getChatBucket, getCurrentSession, getEffectiveSettings,
     getSessionOverrides, hasSessionOverrides, initChatBucket, saveSessionsToMetadata,
     setSessionOverride, updateDepthSlidersMax, updateSPOverrideIndicators, updateSessionOverrideIndicator,
 } from '../session.js';
-import { $, showCustomDialog } from '../utils/util-dom.js';
+import { $, autoResize, showCustomDialog } from '../utils/util-dom.js';
 import { showColorPicker } from '../utils/util-colorpicker.js';
 import { dbgDownload } from '../utils/util-debug.js';
 import { getBindingKey } from '../utils/util-st.js';
@@ -66,7 +66,7 @@ import { refreshAltGreetingsPickers } from '../features/feature-character-engine
 import { buildLorebookContextBlock } from '../features/feature-lorebook-engine.js';
 import { renderEntryList, updateLBFooterInfo, getLbActiveBook, getLbSearchQuery } from '../features/feature-lorebook-ui.js';
 import { renderStatsPane } from '../features/feature-stats.js';
-import { getWindowEl } from '../state.js';
+import { getModalEl, getWindowEl } from '../state.js';
 
 // ── Forward deps: ui-widgets.js and index.js bootstrap don't exist as
 // modules yet. Real functions get swapped in via setForwardDeps() once
@@ -275,6 +275,7 @@ export function syncOverlayUI(key, val) {
 
 export function updateSettingsUI() {
     const s = getSettings();
+    updateChatFontSize(s.chatFontSize);
     const setC = (id, key) => { const el = $(id); if (el) el.checked = !!s[key]; };
     const setI = (id, key) => { const el = $(id); if (el) el.value = s[key] ?? ''; };
     
@@ -388,8 +389,43 @@ export function updateSettingsUI() {
     if (chatEditPromptStEl) chatEditPromptStEl.value = s.chatEditPrompt || DEFAULT_CHAT_EDIT_DIRECTIVE.trim();
 }
 
+function updateChatFontSize(value) {
+    const size = Number(value ?? DEFAULT_CHAT_FONT_SIZE);
+    const px = Number.isFinite(size) ? Math.min(24, Math.max(11, Math.round(size))) : DEFAULT_CHAT_FONT_SIZE;
+    const cssSize = `${px}px`;
+    const win = getWindowEl();
+    if (win && win.style.getPropertyValue('--scp-chat-font-size') !== cssSize) {
+        win.style.setProperty('--scp-chat-font-size', cssSize);
+        for (const input of win.querySelectorAll('.scp-input, .scp-edit-ta')) {
+            input.style.height = 'auto';
+            autoResize(input);
+        }
+    }
+    getModalEl()?.style.setProperty('--scp-chat-font-size', cssSize);
+
+    for (const id of ['scp-chat-font-size', 'scp-sp-chat-font-size']) {
+        const slider = $(id);
+        if (slider) {
+            slider.value = String(px);
+            slider.setAttribute('aria-valuetext', `${px} pixels`);
+        }
+        const output = $(`${id}-value`);
+        if (output) output.value = `${px} px`;
+    }
+    return px;
+}
+
 export function setupSettingsHandlers() {
     const s = getSettings();
+    for (const id of ['scp-chat-font-size', 'scp-sp-chat-font-size']) {
+        const slider = $(id);
+        if (!slider) continue;
+        slider.addEventListener('input', () => updateChatFontSize(slider.value));
+        slider.addEventListener('change', () => {
+            getSettings().chatFontSize = updateChatFontSize(slider.value);
+            saveSettings();
+        });
+    }
 
     const updCtx = () => updateMsgCount(getCurrentSession());
 
