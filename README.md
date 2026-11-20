@@ -63,6 +63,8 @@ You have total control over how Copilot behaves.
 > **What if I only want specific settings for one specific chat?**
 > We've got you covered. The **Session Overrides** tab allows you to temporarily alter settings (like context depth or max tokens) just for the active Copilot session without touching your global defaults.
 
+**Narrator Director context** is enabled by default when Director is active in the open chat. Copilot reads the established scene and selects recorded facts relevant to your question. The Context Inspector shows the included notes under **Narrator Director**. You can turn this off in Copilot’s context settings or Session Overrides.
+
 ### 3. Worldbuilding on Autopilot (Lorebook Manager)
 ![Lorebook Manager - Editor](Assets/Github/LB.png)
 

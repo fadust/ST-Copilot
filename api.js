@@ -35,6 +35,7 @@ import { escHtml } from './utils/util-dom.js';
 import { getUserPersona } from './utils/util-st.js';
 import { getCurrentSession, parseChatPickKey } from './session.js';
 import { applyRegexIfEnabled, buildLorebookContextBlock, buildLBAIInstructions } from './features/feature-lorebook-engine.js';
+import { buildDirectorContextBlock } from './features/feature-director-context.js';
 import { buildCharacterContextBlock, buildCharEditAIInstructions, buildChatEditAIInstructions } from './features/feature-character-engine.js';
 import { mergeContent } from './features/feature-attachments.js';
 
@@ -309,6 +310,11 @@ export async function assembleMessages(session, settings, pendingUserText, pendi
     const locationAtlasBlock = buildLocationAtlasContextBlock(settings);
     if (locationAtlasBlock) {
         messages.push({ role: 'user', content: locationAtlasBlock });
+    }
+    const directorQuery = pendingUserText || session.messages?.findLast(message => message.role === 'user')?.content;
+    const directorBlock = buildDirectorContextBlock(settings, directorQuery);
+    if (directorBlock) {
+        messages.push({ role: 'user', content: directorBlock });
     }
     const summaryceptionBlock = buildSummaryceptionContextBlock(settings);
     if (summaryceptionBlock) {
@@ -647,6 +653,8 @@ if (displayRole === 'user' && /^<plot_tracker>\r?$/m.test(raw)) {
 label = 'Plot Tracker' + (idx > 0? ` #${idx}`: '');
 } else if (displayRole === 'user' && /^<location_atlas>\r?$/m.test(raw)) {
 label = 'Location Atlas' + (idx > 0? ` #${idx}`: '');
+} else if (displayRole === 'user' && /^<narrator_director>\r?$/m.test(raw)) {
+label = 'Narrator Director' + (idx > 0? ` #${idx}`: '');
 } else if (displayRole === 'user' && /^<summaryception_snippets>\r?$/m.test(raw)) {
 label = 'Summaryception Snippets' + (idx > 0? ` #${idx}`: '');
 } else if (displayRole === 'user' && /^<roleplay_context(?:\s[^>]*)?>\r?$/m.test(raw)) {

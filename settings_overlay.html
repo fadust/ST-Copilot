@@ -125,6 +125,7 @@
           <label class="scp-sp-check"><input type="checkbox" id="scp-sp-include-persona"><span>Include User Persona</span></label>
           <label class="scp-sp-check"><input type="checkbox" id="scp-sp-include-plot-tracker"><span>Include Plot Tracker continuity context</span></label>
           <label class="scp-sp-check" title="Send the full current Location Atlas Active Map (not capped by Location Atlas's macro character limit)"><input type="checkbox" id="scp-sp-include-location-atlas"><span>Include Location Atlas continuity context</span></label>
+          <label class="scp-sp-check"><input type="checkbox" id="scp-sp-include-narrator-director"><span>Include Narrator Director context</span></label>
           <label class="scp-sp-check"><input type="checkbox" id="scp-sp-include-summaryception"><span>Read Summaryception snippets</span></label>
           <label class="scp-sp-check" title="Replace Inline Summary messages in Copilot context with their recursively stored original messages. Summaries remain unchanged in SillyTavern."><input type="checkbox" id="scp-sp-inline-summary-originals"><span>Read originals inside Inline Summary</span></label>
           <label class="scp-sp-check"><input type="checkbox" id="scp-sp-include-alt-swipes"><span>Include Alternate Swipes in context</span></label>
@@ -375,6 +376,10 @@
           <div class="scp-sp-ov-check-row">
             <label class="scp-sp-check" title="Send the full current Location Atlas Active Map (not capped by Location Atlas's macro character limit)"><input type="checkbox" id="scp-sp-ov-include-location-atlas"><span>Include Location Atlas continuity context</span></label>
             <button class="scp-sp-ov-clear" data-ovkey="includeLocationAtlasContext" title="Clear override" disabled>↺</button>
+          </div>
+          <div class="scp-sp-ov-check-row">
+            <label class="scp-sp-check"><input type="checkbox" id="scp-sp-ov-include-narrator-director"><span>Include Narrator Director context</span></label>
+            <button class="scp-sp-ov-clear" data-ovkey="includeNarratorDirectorContext" title="Clear override" disabled>↺</button>
           </div>
           <div class="scp-sp-ov-check-row">
             <label class="scp-sp-check"><input type="checkbox" id="scp-sp-ov-include-summaryception"><span>Read Summaryception snippets</span></label>

@@ -1628,6 +1628,7 @@ const _PROFILE_KEYS = [
     'localHistoryLimit', 'connectionSource', 'connectionProfileId', 'maxTokens',
     'includePlotTrackerContext',
     'includeLocationAtlasContext',
+    'includeNarratorDirectorContext',
     'includeSummaryceptionSnippets',
     'applyRegexToContext', 'includeInlineSummaryOriginals', 'reasoningTrimStrings', 'forceStreaming',
     'charEditAIEnabled', 'charEditPrompt', 'lorebookAIManageEnabled',
@@ -1669,6 +1670,7 @@ export function loadProfile(name) {
     for (const k of _PROFILE_KEYS) {
         if (p[k] !== undefined) s[k] = p[k];
     }
+    if (p.includeNarratorDirectorContext === undefined) s.includeNarratorDirectorContext = true;
     if (p.charEditFields) s.charEditFields = JSON.parse(JSON.stringify(p.charEditFields));
     s.activeProfile = name;
     saveSettings();
@@ -1699,6 +1701,7 @@ export function refreshProfilesDropdown() {
             maxTokens: 8200,
             includePlotTrackerContext: false,
             includeLocationAtlasContext: false,
+            includeNarratorDirectorContext: true,
             includeSummaryceptionSnippets: false,
             applyRegexToContext: true,
             includeInlineSummaryOriginals: false,

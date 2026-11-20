@@ -368,6 +368,7 @@ export const SESSION_OVERRIDE_KEYS = [
     'includeSystemPrompt', 'includeUserPersonality', 'reasoningTrimStrings',
     'includePlotTrackerContext',
     'includeLocationAtlasContext',
+    'includeNarratorDirectorContext',
     'includeSummaryceptionSnippets',
     'applyRegexToContext', 'includeInlineSummaryOriginals', 'forceStreaming',
     'charEditAIEnabled', 'charEditPrompt', 'lorebookAIManageEnabled',

@@ -41,6 +41,7 @@ export function getSettings() {
         includeUserPersonality: true,
         includePlotTrackerContext: false,
         includeLocationAtlasContext: false,
+        includeNarratorDirectorContext: true,
         includeSummaryceptionSnippets: false,
         systemPrompt: DEFAULT_SYSTEM_PROMPT,
         profiles: {},
