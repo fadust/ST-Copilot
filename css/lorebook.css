@@ -450,7 +450,8 @@
 .scp-lb-configure-preview { color: var(--scp-text); font-style: normal; }
 .scp-lb-configure-error { color: var(--scp-danger); }
 .scp-lb-proposal-triggers { font-size: 10px; color: var(--scp-accent); opacity: 0.7; margin-top: 3px; }
-.scp-lb-proposal-footer { display: flex; gap: 8px; }
+.scp-lb-proposal-footer { display: flex; flex-wrap: wrap; gap: 8px; }
+.scp-lb-proposal-footer [hidden] { display: none; }
 .scp-lb-proposal-apply, .scp-lb-proposal-reject {
     padding: 5px 14px; border-radius: 6px; font-size: 11px; font-weight: 600;
     cursor: pointer; border: 1px solid; transition: all 0.18s;

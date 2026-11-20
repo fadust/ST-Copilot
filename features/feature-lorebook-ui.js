@@ -34,7 +34,7 @@ import {
     buildLorebookContextBlock, stripLBChangesBlock, resolveLBChangeTarget,
     logLBHistoryChanges, applyLBChanges, getWiCache as _getWiCache,
     clearWiCache, getLastActiveEntries as _getLastActiveEntries,
-    getEntryLayout, updateEntryLayout, setEntryField,
+    getEntryLayout, entryDepthStatus, updateEntryLayout, setEntryField,
     readLorebookUidDirectory,
 } from './feature-lorebook-engine.js';
 import { openDiffModal, reconstructLBChangesBlock } from './feature-chatedit-engine.js';
@@ -66,7 +66,9 @@ export function renderProposalCard(changes, msgEl) {
 
     const editableChanges = changes.map(c => ({ ...c }));
     const itemStates = editableChanges.map(() => 'pending');
+    const loadingConfigurations = new Set(editableChanges.flatMap((change, index) => change.action === 'configure' ? [index] : []));
     const readyConfigurations = new Set();
+    const depthConflicts = new Map();
     let applying = false;
     const actionLabels = { add: '+ Add', edit: '✎ Edit', patch: '✂ Patch', delete: '✕ Remove', configure: 'Configure' };
 
@@ -96,6 +98,8 @@ export function renderProposalCard(changes, msgEl) {
     const getAppliedCount = () => itemStates.filter(s => s === 'applied').length;
     const getApplicableChanges = () => editableChanges.filter((change, index) =>
         itemStates[index] === 'pending' && (change.action !== 'configure' || readyConfigurations.has(index)));
+    const getDepthConflicts = () => [...depthConflicts].filter(([index]) => itemStates[index] === 'pending');
+    const getRemovableDepthConflicts = () => getDepthConflicts().filter(([index]) => Object.keys(editableChanges[index].layout).length > 1);
 
     const checkAllResolved = () => {
         if (getPendingCount() === 0) { syncBlockToMessage(); card.remove(); }
@@ -423,13 +427,16 @@ export function renderProposalCard(changes, msgEl) {
                 if (key === 'position' && positionOptions) return Array.from(positionOptions).find(option => option.value === value)?.textContent ?? value;
                 return typeof value === 'string' ? value[0].toUpperCase() + value.slice(1) : value;
             };
-            const renderSettings = (current = {}) => {
-                previewEl.replaceChildren(...Object.entries(c.layout).map(([key, value]) => {
+            const renderSettings = (current, depthStatus) => {
+                const fields = Object.entries(c.layout).filter(([key]) => key !== 'depth' || depthStatus !== 'unchanged');
+                const rows = fields.map(([key, value]) => {
                     const row = document.createElement('div');
                     const prior = current[key] === undefined ? '' : `${format(key, current[key])} → `;
                     row.textContent = `${labels[key]}: ${prior}${format(key, value)}`;
                     return row;
-                }));
+                });
+                previewEl.replaceChildren(...rows);
+                if (!rows.length) previewEl.textContent = 'These settings already match the saved entry.';
             };
             applyItemBtn.disabled = true;
             previewEl.textContent = 'Looking up entry…';
@@ -454,11 +461,27 @@ export function renderProposalCard(changes, msgEl) {
                 uidLabel.className = 'scp-lb-uid';
                 uidLabel.textContent = `UID ${origEntry.uid}`;
                 itemMeta.appendChild(uidLabel);
-                renderSettings({ ...getEntryLayout(origEntry), listPosition: wiEntriesToArray(data).indexOf(origEntry) + 1 });
-                readyConfigurations.add(ci);
-                applyItemBtn.disabled = false;
+                const refreshSettings = () => {
+                    const depthStatus = entryDepthStatus(origEntry, c.layout);
+                    renderSettings({ ...getEntryLayout(origEntry), listPosition: wiEntriesToArray(data).indexOf(origEntry) + 1 }, depthStatus);
+                    if (depthStatus === 'incompatible') {
+                        depthConflicts.set(ci, refreshSettings);
+                        const issue = document.createElement('div');
+                        issue.className = 'scp-lb-configure-error';
+                        issue.textContent = 'Depth requires an At depth insertion position.';
+                        previewEl.appendChild(issue);
+                    } else {
+                        depthConflicts.delete(ci);
+                        readyConfigurations.add(ci);
+                        applyItemBtn.disabled = false;
+                    }
+                    updateFooterBtns();
+                };
+                refreshSettings();
+            }).catch(() => showLookupError('Could not read the selected lorebook.')).finally(() => {
+                loadingConfigurations.delete(ci);
                 updateFooterBtns();
-            }).catch(() => showLookupError('Could not read the selected lorebook.'));
+            });
             item.appendChild(previewEl);
         } else if (c.content) {
             previewEl = document.createElement('div');
@@ -654,6 +677,21 @@ export function renderProposalCard(changes, msgEl) {
     const rejectAllBtn = document.createElement('button');
     rejectAllBtn.className = 'scp-lb-proposal-reject'; rejectAllBtn.textContent = 'Reject All';
 
+    const removeDepthBtn = document.createElement('button');
+    removeDepthBtn.type = 'button';
+    removeDepthBtn.className = 'scp-lb-detail-btn';
+    removeDepthBtn.textContent = 'Remove incompatible Depth changes';
+    removeDepthBtn.addEventListener('click', () => {
+        if (applying) return;
+        for (const [index, refreshSettings] of getRemovableDepthConflicts()) {
+            const layout = { ...editableChanges[index].layout };
+            delete layout.depth;
+            editableChanges[index].layout = layout;
+            refreshSettings();
+        }
+        syncBlockToMessage();
+    });
+
     const updateCountBadge = () => {
         const p = getPendingCount();
         countBadge.textContent = p > 0 ? `${p} pending` : `${getAppliedCount()} applied`;
@@ -663,13 +701,17 @@ export function renderProposalCard(changes, msgEl) {
         const p = getPendingCount();
         applyAllBtn.style.display = p > 0 ? '' : 'none';
         rejectAllBtn.style.display = p > 0 ? '' : 'none';
-        applyAllBtn.disabled = applying || getApplicableChanges().length === 0;
+        applyAllBtn.disabled = applying || [...loadingConfigurations].some(index => itemStates[index] === 'pending')
+            || getDepthConflicts().length > 0 || getApplicableChanges().length === 0;
+        removeDepthBtn.hidden = getRemovableDepthConflicts().length === 0;
+        removeDepthBtn.disabled = applying;
     };
 
     const applyPending = async pending => {
         if (applying || !pending.length) return;
         applying = true;
-        applyAllBtn.disabled = true; applyAllBtn.textContent = 'Applying…';
+        applyAllBtn.textContent = 'Applying…';
+        updateFooterBtns();
         try {
             const confirmed = await applyLBChanges(pending, card.dataset.for);
             editableChanges.forEach((change, i) => {
@@ -709,7 +751,7 @@ export function renderProposalCard(changes, msgEl) {
         checkAllResolved();
     });
 
-    footer.appendChild(applyAllBtn); footer.appendChild(rejectAllBtn);
+    footer.append(applyAllBtn, rejectAllBtn, removeDepthBtn);
     updateFooterBtns();
     card.appendChild(header); card.appendChild(list); card.appendChild(footer);
     const body = msgEl.querySelector('.scp-msg-body');

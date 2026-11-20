@@ -126,7 +126,7 @@ test('chat assembly supplies the exact matched entry and current settings withou
     const system = messages[0].content;
     const context = JSON.parse(system.match(/<lorebook_entry_settings>\n(.*)\n<\/lorebook_entry_settings>/)[1]);
     assert.deepEqual(context, [{ book: 'Cast', count: 2, entries: [
-        { uid: 8, name: 'Janus', strategy: 'normal', position: '0', depth: 4, order: 100, probability: 100, listPosition: 2 },
+        { uid: 8, name: 'Janus', strategy: 'normal', position: '0', order: 100, probability: 100, listPosition: 2 },
     ] }]);
     assert.match(system, /"action":"configure"/);
     assert.doesNotMatch(system, /Keeper of the gate/);
@@ -160,6 +160,16 @@ test('configuration requires exact book entry identity and validates the whole l
     assert.equal((await applyLBChanges([{ ...configure, layout: { depth: 3 } }])).size, 0);
     assert.deepEqual(books.get('Cast').entries[8], janus);
     assert.deepEqual(writes, []);
+});
+
+test('redundant Depth on an inactive position does not block an otherwise valid batch', async () => {
+    books.get('Cast').entries[8] = { ...janus, position: 0, depth: 4 };
+    const proposal = { ...configure, layout: { position: '1', depth: 4, order: 130 } };
+    assert.deepEqual([...await applyLBChanges([proposal])], [proposal]);
+    assert.equal(books.get('Cast').entries[8].depth, 4);
+    assert.equal(books.get('Cast').entries[8].position, 1);
+    assert.equal(books.get('Cast').entries[8].order, 130);
+    assert.deepEqual(writes, ['Cast']);
 });
 
 test('read-only lookup uses current saved UIDs, with book and keyword matching', async () => {

@@ -345,11 +345,18 @@ function normalizeLayout(layout) {
         ? Object.fromEntries(fields) : null;
 }
 
+export function entryDepthStatus(entry, layout) {
+    const current = getEntryLayout(entry);
+    if (layout.depth === undefined || (layout.position ?? current.position).startsWith('4:')) return 'active';
+    return layout.depth === current.depth ? 'unchanged' : 'incompatible';
+}
+
 export function updateEntryLayout(data, entry, settings) {
     const layout = normalizeLayout(settings);
     if (!layout) throw new Error('Invalid entry settings.');
     const position = layout.position ?? getEntryLayout(entry).position;
-    if (layout.depth !== undefined && !position.startsWith('4:')) {
+    const depthStatus = entryDepthStatus(entry, layout);
+    if (depthStatus === 'incompatible') {
         throw new Error('Choose an At depth position before changing Depth.');
     }
     if (layout.listPosition !== undefined) {
@@ -376,7 +383,7 @@ export function updateEntryLayout(data, entry, settings) {
         setEntryField(data, entry, 'role', slot === 4 ? role : null, 'extensions.role');
         getSTWorldInfo()?.setWIOriginalDataValue?.(data, entry.uid, 'position', slot === 0 ? 'before_char' : 'after_char');
     }
-    if (layout.depth !== undefined) setEntryField(data, entry, 'depth', layout.depth, 'extensions.depth');
+    if (layout.depth !== undefined && depthStatus === 'active') setEntryField(data, entry, 'depth', layout.depth, 'extensions.depth');
     if (layout.order !== undefined) setEntryField(data, entry, 'order', layout.order, 'insertion_order');
     if (layout.probability !== undefined) {
         setEntryField(data, entry, 'probability', layout.probability, 'extensions.probability');
@@ -439,10 +446,11 @@ export async function buildEntryCommandContext(settings, query) {
         const wholeBook = uid === undefined && namedBooks.includes(name)
             && (listUids && (!matched.length || /\b(?:all|every)\b/i.test(query))
                 || (settingsRequest && /\breorder\b/i.test(query)));
-        const entries = (wholeBook ? records : matched).map(record => ({
-            uid: record.entry.uid, name: record.name, listPosition: record.listPosition,
-            ...(!wholeBook || matched.includes(record) ? getEntryLayout(record.entry) : {}),
-        }));
+        const entries = (wholeBook ? records : matched).map(record => {
+            const layout = !wholeBook || matched.includes(record) ? getEntryLayout(record.entry) : {};
+            if (!layout.position?.startsWith('4:')) delete layout.depth;
+            return { uid: record.entry.uid, name: record.name, listPosition: record.listPosition, ...layout };
+        });
         return entries.length ? { book: name, count: ordered.length, entries } : null;
     }));
     const found = matches.filter(Boolean);
