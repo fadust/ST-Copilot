@@ -63,6 +63,7 @@ export function renderProposalCard(changes, msgEl) {
 
     const editableChanges = changes.map(c => ({ ...c }));
     const itemStates = editableChanges.map(() => 'pending');
+    const readyConfigurations = new Set();
     let applying = false;
     const actionLabels = { add: '+ Add', edit: '✎ Edit', patch: '✂ Patch', delete: '✕ Remove', configure: 'Configure' };
 
@@ -90,6 +91,8 @@ export function renderProposalCard(changes, msgEl) {
 
     const getPendingCount = () => itemStates.filter(s => s === 'pending').length;
     const getAppliedCount = () => itemStates.filter(s => s === 'applied').length;
+    const getApplicableChanges = () => editableChanges.filter((change, index) =>
+        itemStates[index] === 'pending' && (change.action !== 'configure' || readyConfigurations.has(index)));
 
     const checkAllResolved = () => {
         if (getPendingCount() === 0) { syncBlockToMessage(); card.remove(); }
@@ -142,7 +145,7 @@ export function renderProposalCard(changes, msgEl) {
         itemMeta.style.cssText = 'display:flex;align-items:center;gap:8px;flex:1;min-width:0;flex-wrap:wrap';
         itemMeta.innerHTML = `
             <span class="scp-lb-proposal-action">${escHtml(actionLabels[c.action] || c.action || '?')}</span>
-            <span class="scp-lb-proposal-name scp-lb-pn-target">${escHtml(c.name || c.originalName || `Entry #${c.uid || '?'}`)}</span>${c.constant ? '<span class="scp-lb-src-badge scp-lb-src-global" style="font-size:9px;padding:1px 5px" title="Constant entry">★</span>' : ''}`;
+            <span class="scp-lb-proposal-name scp-lb-pn-target">${escHtml(c.name || c.originalName || `Entry #${c.uid ?? '?'}`)}</span>${c.constant ? '<span class="scp-lb-src-badge scp-lb-src-global" style="font-size:9px;padding:1px 5px" title="Constant entry">★</span>' : ''}`;
 
         const _activeBooks = getActiveLorebookNames();
         const _currentBook = editableChanges[ci].worldName || '';
@@ -425,16 +428,34 @@ export function renderProposalCard(changes, msgEl) {
                     return row;
                 }));
             };
-            renderSettings();
-            resolveLBChangeTarget(c, true).then(({ data, origEntry }) => {
-                if (origEntry) {
-                    renderSettings({ ...getEntryLayout(origEntry), listPosition: wiEntriesToArray(data).indexOf(origEntry) + 1 });
-                } else {
-                    worldTriggerText.textContent += ' ⚠';
-                    applyItemBtn.disabled = true;
-                    applyItemBtn.title = 'Entry not found in the selected lorebook';
+            applyItemBtn.disabled = true;
+            previewEl.textContent = 'Looking up entry…';
+            const showLookupError = message => {
+                previewEl.textContent = message;
+                previewEl.classList.add('scp-lb-configure-error');
+            };
+            resolveLBChangeTarget(c, true).then(({ data, origEntry, matchingUids }) => {
+                if (itemStates[ci] !== 'pending') return;
+                if (data?._embedded) {
+                    showLookupError('Edit this embedded entry in its character card.');
+                    return;
                 }
-            }).catch(() => {});
+                if (!origEntry) {
+                    showLookupError(matchingUids
+                        ? `Several entries have this name. Specify a UID from ${matchingUids.join(', ')} in chat.`
+                        : 'Entry not found. Check the lorebook name and entry title.');
+                    return;
+                }
+                editableChanges[ci].uid = origEntry.uid;
+                const uidLabel = document.createElement('span');
+                uidLabel.className = 'scp-lb-uid';
+                uidLabel.textContent = `UID ${origEntry.uid}`;
+                itemMeta.appendChild(uidLabel);
+                renderSettings({ ...getEntryLayout(origEntry), listPosition: wiEntriesToArray(data).indexOf(origEntry) + 1 });
+                readyConfigurations.add(ci);
+                applyItemBtn.disabled = false;
+                updateFooterBtns();
+            }).catch(() => showLookupError('Could not read the selected lorebook.'));
             item.appendChild(previewEl);
         } else if (c.content) {
             previewEl = document.createElement('div');
@@ -639,6 +660,7 @@ export function renderProposalCard(changes, msgEl) {
         const p = getPendingCount();
         applyAllBtn.style.display = p > 0 ? '' : 'none';
         rejectAllBtn.style.display = p > 0 ? '' : 'none';
+        applyAllBtn.disabled = applying || getApplicableChanges().length === 0;
     };
 
     const applyPending = async pending => {
@@ -661,14 +683,12 @@ export function renderProposalCard(changes, msgEl) {
             toastr.error(`Failed: ${e.message}`, EXT_DISPLAY, { escapeHtml: true });
         } finally {
             applying = false;
-            applyAllBtn.disabled = false; applyAllBtn.textContent = 'Apply All';
+            applyAllBtn.textContent = 'Apply All';
+            updateFooterBtns();
         }
     };
 
-    applyAllBtn.addEventListener('click', () => {
-        const pending = editableChanges.filter((_, i) => itemStates[i] === 'pending');
-        return applyPending(pending);
-    });
+    applyAllBtn.addEventListener('click', () => applyPending(getApplicableChanges()));
 
     rejectAllBtn.addEventListener('click', () => {
         if (applying) return;
@@ -687,6 +707,7 @@ export function renderProposalCard(changes, msgEl) {
     });
 
     footer.appendChild(applyAllBtn); footer.appendChild(rejectAllBtn);
+    updateFooterBtns();
     card.appendChild(header); card.appendChild(list); card.appendChild(footer);
     const body = msgEl.querySelector('.scp-msg-body');
     if (body) body.insertBefore(card, body.querySelector('.scp-swipe-bar'));
@@ -840,11 +861,14 @@ export async function renderEntryList(bookName, search = '') {
     const activeEntryUids = new Set(
         _getLastActiveEntries().filter(e => e.bookName === bookName).map(e => e.uid)
     );
-    const lowerSearch = search.toLowerCase();
+    const lowerSearch = search.trim().toLowerCase();
+    const explicitUid = /^(?:uid\s*[:#]?\s*|#)(\d+)$/.exec(lowerSearch)?.[1];
     const filtered = search ? entries.filter(e => {
+        if (explicitUid !== undefined) return Number(e.uid) === Number(explicitUid);
         return (e.comment || '').toLowerCase().includes(lowerSearch)
             || (e.content || '').toLowerCase().includes(lowerSearch)
-            || (e.key || []).join(' ').toLowerCase().includes(lowerSearch);
+            || (e.key || []).join(' ').toLowerCase().includes(lowerSearch)
+            || String(e.uid) === lowerSearch;
     }) : entries;
     const metric = entrySortValue[sort];
     if (metric) {
@@ -880,6 +904,7 @@ export async function renderEntryList(bookName, search = '') {
                 <span class="scp-lb-entry-name">${escHtml(entry.comment || `#${entry.uid}`)}${isInCtx ? ' <span class="scp-lb-in-ctx-badge">in context</span>' : ''}</span>
                 <span class="scp-lb-entry-keys">${entry.key?.slice(0, 5).map(k => escHtml(k)).join(' · ') || '—'}</span>
             </div>
+            <span class="scp-lb-uid">UID ${escHtml(String(entry.uid))}</span>
             ${metric ? `<span class="scp-lb-sort-value">${escHtml(String(metric(entry)))}${sort === 'probability' ? '%' : ''}</span>` : ''}
             <div class="scp-lb-entry-actions">
                 <button class="scp-lb-entry-toggle-btn ${indClass}" title="Cycle: Default → Force On → Force Off">${btnText}</button>
@@ -964,6 +989,9 @@ export function showEntryDetail(entry, bookName, data = _getWiCache()[bookName])
     document.getElementById('scp-lb-entries').style.display = 'none';
 
     document.getElementById('scp-lb-detail-title').textContent = entry.comment || `Entry #${entry.uid}`;
+    const uidButton = document.getElementById('scp-lb-detail-uid');
+    uidButton.textContent = `UID ${entry.uid}`;
+    uidButton.setAttribute('aria-label', `Copy entry UID ${entry.uid}`);
     document.getElementById('scp-lb-detail-name').value = entry.comment || '';
     document.getElementById('scp-lb-detail-triggers').value = (entry.key || []).join(', ');
     document.getElementById('scp-lb-detail-content').value = entry.content || '';
@@ -1203,6 +1231,9 @@ export function setupLorebookManagerListeners() {
     });
     document.getElementById('scp-lb-detail-save')?.addEventListener('click', saveEntryDetail);
     document.getElementById('scp-lb-detail-delete')?.addEventListener('click', deleteEntryDetail);
+    document.getElementById('scp-lb-detail-uid')?.addEventListener('click', () => {
+        if (_lbEntryDetailEntry?.uid != null) copyText(String(_lbEntryDetailEntry.uid));
+    });
     document.getElementById('scp-lb-detail-copy')?.addEventListener('click', () => {
         const c = document.getElementById('scp-lb-detail-content')?.value; if (c) copyText(c);
     });

@@ -284,6 +284,8 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px;
 }
 .scp-lb-entry-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.scp-lb-uid { flex-shrink: 0; color: var(--scp-text); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.scp-lb-uid:focus-visible { outline: 2px solid var(--scp-accent); outline-offset: 2px; }
 .scp-lb-in-ctx-badge {
     display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px;
     background: var(--scp-accent-bg); color: var(--scp-accent); border: 1px solid var(--scp-accent-dim);
@@ -435,6 +437,7 @@
 .scp-lb-proposal-world { font-size: 10px; color: var(--scp-text-muted); }
 .scp-lb-proposal-preview { font-size: 11px; color: var(--scp-text-muted); margin-top: 5px; font-style: italic; line-height: 1.5; }
 .scp-lb-configure-preview { color: var(--scp-text); font-style: normal; }
+.scp-lb-configure-error { color: var(--scp-danger); }
 .scp-lb-proposal-triggers { font-size: 10px; color: var(--scp-accent); opacity: 0.7; margin-top: 3px; }
 .scp-lb-proposal-footer { display: flex; gap: 8px; }
 .scp-lb-proposal-apply, .scp-lb-proposal-reject {

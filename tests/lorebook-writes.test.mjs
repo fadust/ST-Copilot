@@ -28,7 +28,7 @@ globalThis.fetch = async (path, { body }) => {
     return Response.json(books.get(name) ?? { entries: {} });
 };
 
-const { applyLBChanges, clearWiCache, parseLBChangesFromText } = await import('../features/feature-lorebook-engine.js');
+const { applyLBChanges, buildEntryCommandContext, clearWiCache, fetchWorldInfoBook, parseLBChangesFromText } = await import('../features/feature-lorebook-engine.js');
 const { assembleMessages } = await import('../api.js');
 const { setSTWorldInfo } = await import('../state.js');
 setSTWorldInfo({ selected_world_info: ['Cast', 'Other'], worldInfoCache: nativeCache });
@@ -159,5 +159,43 @@ test('configuration requires exact book entry identity and validates the whole l
     assert.equal((await applyLBChanges([{ ...configure, layout: { listPosition: 9, probability: 0 } }])).size, 0);
     assert.equal((await applyLBChanges([{ ...configure, layout: { depth: 3 } }])).size, 0);
     assert.deepEqual(books.get('Cast').entries[8], janus);
+    assert.deepEqual(writes, []);
+});
+
+test('read-only lookup uses current saved UIDs, with book and keyword matching', async () => {
+    books.get('Cast').entries[0] = { ...janus, uid: 0, comment: 'Janus of the Gate' };
+    books.get('Other').entries[4] = { ...janus, uid: 4 };
+    await fetchWorldInfoBook('Cast');
+    books.get('Cast').entries[0].order = 321;
+    const context = await buildEntryCommandContext({ lorebookAIManageEnabled: false }, 'What is the UID for Janus in Cast?');
+    const records = JSON.parse(context.match(/<lorebook_entry_settings>\n(.*)\n<\/lorebook_entry_settings>/)[1]);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].book, 'Cast');
+    assert.deepEqual(records[0].entries.map(({ uid, name, order }) => ({ uid, name, order })), [
+        { uid: 0, name: 'Janus of the Gate', order: 321 },
+    ]);
+    assert.match(await buildEntryCommandContext({}, 'Which entry has UID #0 in Cast?'), /"uid":0/);
+    assert.doesNotMatch(context, /Keeper of the gate/);
+    assert.deepEqual(writes, []);
+});
+
+test('a configure proposal can omit the UID when the book contains one exact title match', async () => {
+    books.get('Cast').entries[8] = { ...janus };
+    books.get('Other').entries[9] = { ...janus, uid: 9 };
+    const { uid, ...namedChange } = { ...configure, layout: { probability: 10 } };
+    const pending = parseLBChangesFromText('\x60\x60\x60lorebook-changes\n' + JSON.stringify({ changes: [namedChange] }) + '\n\x60\x60\x60');
+    assert.deepEqual(pending, [namedChange]);
+    assert.deepEqual([...await applyLBChanges(pending)], [namedChange]);
+    assert.equal(books.get('Cast').entries[uid].probability, 10);
+    assert.deepEqual(writes, ['Cast']);
+});
+
+test('duplicate titles in the same book and mismatched explicit UIDs cannot be applied by name', async () => {
+    books.get('Cast').entries[8] = { ...janus };
+    books.get('Cast').entries[18] = { ...janus, uid: 18 };
+    const unresolved = { ...configure, uid: undefined };
+    assert.equal((await applyLBChanges([unresolved])).size, 0);
+    assert.match(failures[0], /8, 18/);
+    assert.equal((await applyLBChanges([{ ...configure, uid: 80 }])).size, 0);
     assert.deepEqual(writes, []);
 });

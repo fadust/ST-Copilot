@@ -73,6 +73,7 @@ The crown jewel of ST-Copilot. A dedicated UI for managing your World Info.
 *   Edit entries, triggers, and content on the fly.
 *   Use **List position** to move an entry, or sort the view by strategy, depth, order, or trigger chance. The entry editor also sets the native World Info strategy, insertion position, depth, priority order, and trigger chance.
 *   With **Enable AI Lorebook Editing** checked, ask in Copilot chat for changes such as “Move Janus to the top of Cast and set his trigger chance to 35%.” Review the proposed settings and click **Apply** to save them.
+*   Search for an entry by UID, or click its UID in the editor to copy it. In Copilot chat, ask “What is the UID for Janus in Cast?” A settings proposal can identify an entry by its exact title and book when that title is unique.
 *   **AI-Edits:** Ask Copilot to "Create a lorebook entry about the city we just entered." It will generate a Proposal Card in the chat. You can review the diff, edit the text inline, and apply it directly to your ST Lorebook with one click!
 *   If streaming ends during a JSON proposal, Copilot tries once to complete the block without streaming. The recovered proposal still appears for review.
 

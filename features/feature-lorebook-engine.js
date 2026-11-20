@@ -168,6 +168,11 @@ async function requestWorldInfo(operation, body) {
     return response;
 }
 
+async function readWorldInfoBook(name) {
+    if (name === EMBEDDED_BOOK_KEY) return getEmbeddedCharBook();
+    return (await requestWorldInfo('get', { name })).json();
+}
+
 function queueLorebookWrite(write) {
     const result = _lorebookWrites.then(write);
     _lorebookWrites = result.catch(() => {});
@@ -176,7 +181,7 @@ function queueLorebookWrite(write) {
 
 export function editWorldInfoBook(name, edit) {
     return queueLorebookWrite(async () => {
-        const data = await (await requestWorldInfo('get', { name })).json();
+        const data = await readWorldInfoBook(name);
         const entry = edit(data);
         await saveWorldInfoBook(name, data);
         return { data, entry };
@@ -379,28 +384,49 @@ export function updateEntryLayout(data, entry, settings) {
     }
 }
 
+function entryTitle(entry) {
+    return entry.comment?.trim() || `Entry #${entry.uid}`;
+}
+
+function mentionsName(text, name) {
+    const literal = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return Boolean(literal) && new RegExp(`(?:^|[^\\p{L}\\p{N}_])${literal}(?=$|[^\\p{L}\\p{N}_])`, 'iu').test(text);
+}
+
 export async function buildEntryCommandContext(settings, query) {
-    if (!settings.lorebookAIManageEnabled || typeof query !== 'string') return '';
+    if (typeof query !== 'string') return '';
+    const uidRequest = /\b(?:uids?|entry ids?)\b/i.test(query);
     const settingsRequest = /\b(?:lorebook|world info|trigger|chance|probability|order|priority|depth|strategy|constant|vectorized|reorder|position)\b/i.test(query);
     const moveRequest = /\b(?:move|put|place)\b/i.test(query) && /\b(?:top|bottom|before|after|first|last)\b/i.test(query);
-    if (!settingsRequest && !moveRequest) return '';
+    if (!uidRequest && !(settings.lorebookAIManageEnabled && (settingsRequest || moveRequest))) return '';
 
-    const books = getActiveLorebookNames().filter(name => !(settings.lorebookExcludedBooks || []).includes(name));
-    const text = query.toLowerCase();
+    const activeBooks = getActiveLorebookNames();
+    const knownBooks = new Set([...activeBooks, ...(getSTWorldInfo()?.world_names || [])]);
+    const namedBooks = [...knownBooks].filter(name => mentionsName(query, name));
+    const books = (namedBooks.length ? namedBooks : activeBooks).filter(name => !(settings.lorebookExcludedBooks || []).includes(name));
+    const uid = query.match(/\b(?:uid|entry id)\s*[:#]?\s*(\d+)\b/i)?.[1];
+    const listUids = /\b(?:uids|entry ids)\b/i.test(query);
     const matches = await Promise.all(books.map(async name => {
-        const ordered = wiEntriesToArray(await fetchWorldInfoBook(name));
-        const entries = ordered.flatMap((entry, index) => {
-            const title = (entry.comment || `Entry #${entry.uid}`).trim();
-            const target = title.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            if (!target || !new RegExp(`(?:^|[^\\p{L}\\p{N}_])${target}(?=$|[^\\p{L}\\p{N}_])`, 'u').test(text)) return [];
-            return [{ uid: entry.uid, name: title, ...getEntryLayout(entry), listPosition: index + 1 }];
-        });
-        return entries.length ? { book: name, count: ordered.length, entries: entries.slice(0, 30) } : null;
+        const data = uidRequest
+            ? await readWorldInfoBook(name).catch(() => null)
+            : await fetchWorldInfoBook(name);
+        const ordered = wiEntriesToArray(data);
+        const records = ordered.map((entry, index) => ({ entry, name: entryTitle(entry), listPosition: index + 1 }));
+        const matched = records.filter(record => uid === undefined
+            ? mentionsName(query, record.name) || record.entry.key?.some(key => typeof key === 'string' && !key.startsWith('/') && mentionsName(query, key))
+            : Number(record.entry.uid) === Number(uid));
+        const results = matched.length || !listUids || !namedBooks.includes(name) ? matched : records;
+        const entries = results.slice(0, 30).map(record => ({
+            uid: record.entry.uid, name: record.name, ...getEntryLayout(record.entry), listPosition: record.listPosition,
+        }));
+        return entries.length ? { book: name, count: ordered.length, entries } : null;
     }));
     const found = matches.filter(Boolean);
-    if (!found.length) return '';
+    if (!found.length && !uidRequest) return '';
     const data = JSON.stringify(found).replaceAll('<', '\\u003c');
-    return `<lorebook_entry_settings>\n${data}\n</lorebook_entry_settings>`;
+    const block = `<lorebook_entry_settings>\n${data}\n</lorebook_entry_settings>`;
+    if (!uidRequest) return block;
+    return `Use the saved entry records below to answer UID questions. Give the lorebook name with each UID. For an empty result, say no matching entry was found and ask for the book or title. A read-only UID request needs no edit proposal.\n\n${block}`;
 }
 
 export function keywordMatchEntry(keys, text) {
@@ -681,8 +707,10 @@ export function _sanitizeLBChanges(changes) {
         if (c.action === 'configure') {
             const layout = normalizeLayout(c.layout);
             if (layout && typeof c.worldName === 'string' && c.worldName.trim()
-                && Number.isInteger(c.uid) && c.uid >= 0 && typeof c.name === 'string' && c.name.trim()) {
-                valid.push({ action: c.action, worldName: c.worldName, uid: c.uid, name: c.name, layout });
+                && (c.uid == null || (Number.isInteger(c.uid) && c.uid >= 0)) && typeof c.name === 'string' && c.name.trim()) {
+                const target = { action: c.action, worldName: c.worldName.trim(), name: c.name.trim(), layout };
+                if (c.uid != null) target.uid = c.uid;
+                valid.push(target);
             }
             continue;
         }
@@ -765,7 +793,7 @@ async function bindSavedLorebookToCharacter(bookName) {
     }
 }
 
-export async function resolveLBChangeTarget(change, strictBook = false, loadBook = fetchWorldInfoBook) {
+export async function resolveLBChangeTarget(change, strictBook = false, loadBook = change.action === 'configure' ? readWorldInfoBook : fetchWorldInfoBook) {
     let bookName = change.worldName || '';
     let targetUid = change.uid;
 
@@ -799,10 +827,16 @@ export async function resolveLBChangeTarget(change, strictBook = false, loadBook
     let origEntry = null;
     if (data && data.entries) {
         const entries = Object.values(data.entries);
-        const entryName = entry => (entry.comment || `Entry #${entry.uid}`).trim().toLowerCase();
+        const entryName = entry => entryTitle(entry).toLowerCase();
         origEntry = targetUid == null ? null : entries.find(entry => String(entry.uid) === String(targetUid));
         if (change.action === 'configure') {
-            if (origEntry && entryName(origEntry) !== fuzzyName) origEntry = null;
+            if (targetUid != null) {
+                if (origEntry && entryName(origEntry) !== fuzzyName) origEntry = null;
+            } else {
+                const matches = entries.filter(entry => entryName(entry) === fuzzyName);
+                if (matches.length > 1) return { bookName, data, origEntry: null, matchingUids: matches.map(entry => entry.uid) };
+                origEntry = matches[0] ?? null;
+            }
             return { bookName, data, origEntry };
         }
         if (!origEntry && fuzzyName && (!strictBook || targetUid == null)) {
@@ -912,8 +946,7 @@ async function applyProposalChanges(changes, afterMsgId) {
         if (!name) return null;
         if (name === EMBEDDED_BOOK_KEY) return getEmbeddedCharBook();
         if (!books.has(name)) {
-            const response = await requestWorldInfo('get', { name });
-            books.set(name, { data: await response.json(), changes: [] });
+            books.set(name, { data: await readWorldInfoBook(name), changes: [] });
         }
         return books.get(name).data;
     };
@@ -926,10 +959,11 @@ async function applyProposalChanges(changes, afterMsgId) {
     for (const change of changes) {
         const label = change.name || change.originalName || change.uid || '?';
         try {
-            const { bookName, data, origEntry } = await resolveLBChangeTarget(change, Boolean(change.worldName), loadBook);
+            const { bookName, data, origEntry, matchingUids } = await resolveLBChangeTarget(change, Boolean(change.worldName), loadBook);
             if (!bookName || !data?.entries) throw new Error(`Lorebook "${change.worldName || '(unspecified)'}" was not found.`);
             if (data._embedded) throw new Error('Choose an external lorebook. Embedded character books are read-only here.');
             if (!['add', 'edit', 'patch', 'delete', 'configure'].includes(change.action)) throw new Error(`Unknown action "${change.action}".`);
+            if (matchingUids) throw new Error(`Multiple entries named "${label}" in "${bookName}". Specify a UID from ${matchingUids.join(', ')}.`);
             if (change.action !== 'add' && !origEntry) {
                 throw new Error(`Entry not found in "${bookName}". Create the entry first or select the correct entry.`);
             }

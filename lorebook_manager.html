@@ -8,7 +8,7 @@
             <div class="scp-lb-header-center">
                 <div class="scp-lb-search-wrap">
                     ${I.search}
-                    <input type="text" id="scp-lb-search" class="scp-lb-search" placeholder="Search entries by name, keys, content…">
+                    <input type="text" id="scp-lb-search" class="scp-lb-search" aria-label="Search lorebook entries" placeholder="Search entries or UID…">
                 </div>
             </div>
             <div class="scp-lb-header-right">
@@ -67,6 +67,7 @@
                         <div class="scp-lb-detail-header">
                             <button class="scp-lb-back-btn" id="scp-lb-back">← Back</button>
                             <span class="scp-lb-detail-title" id="scp-lb-detail-title">Entry</span>
+                            <button type="button" class="scp-lb-detail-btn scp-lb-uid" id="scp-lb-detail-uid" title="Copy entry UID"></button>
                             <div class="scp-lb-detail-actions">
                                 <button class="scp-lb-detail-btn" id="scp-lb-detail-copy" title="Copy content">${I.copy}</button>
                                 <button class="scp-lb-detail-btn scp-lb-detail-save-btn" id="scp-lb-detail-save" title="Save">${I.check} Save</button>
