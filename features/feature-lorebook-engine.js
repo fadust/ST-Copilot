@@ -45,6 +45,7 @@ let _wiPromises = {};
 export const EMBEDDED_BOOK_KEY = '__char_embedded__';
 let _lastActiveEntries = [];
 let _regexModule = false;
+let _proposalWrites = Promise.resolve();
 
 // Accessors for feature-lorebook-ui.js — `_wiCache` and `_lastActiveEntries`
 // stay module-private `let` bindings (only this module can reassign them),
@@ -147,36 +148,49 @@ export function getEmbeddedCharBook() {
     return data;
 }
 
-export async function saveWorldInfoBook(name, data) {
-    if (data._embedded) { toastr.warning('Cannot save embedded character books directly.', EXT_DISPLAY); return; }
+async function requestWorldInfo(operation, body) {
     const ctx = SillyTavern.getContext();
+    const response = await fetch(`/api/worldinfo/${operation}`, {
+        method: 'POST',
+        headers: { ...ctx.getRequestHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(`HTTP ${response.status}${detail ? ` (${detail})` : ''}`);
+    }
+    return response;
+}
+
+export async function saveWorldInfoBook(name, data) {
+    if (data._embedded) throw new Error('Cannot save embedded character books directly. Choose an external lorebook.');
     const payload = structuredClone(data);
     delete payload._ts;
+    // The host's save helper updates its cache before receiving the HTTP response.
+    // Read directly from the server so that an optimistic cache cannot confirm a write.
     try {
-        if (typeof ctx.saveWorldInfo === 'function') {
-            await ctx.saveWorldInfo(name, payload, true);
-        } else {
-            const res = await fetch('/api/worldinfo/edit', {
-                method: 'POST',
-                headers: { ...ctx.getRequestHeaders(), 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, data: payload }),
-            });
-            if (!res.ok) {
-                const errText = await res.text().catch(() => res.statusText);
-                throw new Error(`HTTP ${res.status}: ${errText}`);
-            }
+        await requestWorldInfo('edit', { name, data: payload });
+        const saved = await (await requestWorldInfo('get', { name })).json();
+        if (JSON.stringify(saved) !== JSON.stringify(payload)) {
+            throw new Error('The saved lorebook does not match the submitted changes.');
         }
     } catch (e) {
         console.error(`[${EXT_DISPLAY}] saveWorldInfoBook failed for "${name}":`, e);
         throw e;
+    } finally {
+        delete _wiCache[name];
     }
-    delete _wiCache[name];
-    
+
+    const ctx = SillyTavern.getContext();
     try {
-        if (typeof ctx.reloadWorldInfoEditor === 'function') {
-            ctx.reloadWorldInfoEditor(name, true);
+        getSTWorldInfo()?.worldInfoCache?.set(name, payload);
+        if (ctx.eventTypes?.WORLDINFO_UPDATED) {
+            await ctx.eventSource?.emit(ctx.eventTypes.WORLDINFO_UPDATED, name, payload);
         }
-    } catch (_) {}
+        await ctx.reloadWorldInfoEditor?.(name, true);
+    } catch (e) {
+        console.warn(`[${EXT_DISPLAY}] Saved "${name}" but could not refresh the lorebook UI:`, e);
+    }
 }
 
 
@@ -577,33 +591,11 @@ export function stripLBChangesBlock(text) {
         .trim();
 }
 
-export async function bindNewLorebookToCharacter(bookName) {
+async function bindSavedLorebookToCharacter(bookName) {
     try {
         const ctx = SillyTavern.getContext();
-
-        const allBooks = window.world_names || getSTWorldInfo()?.world_names || [];
-        const isNew = !allBooks.includes(bookName);
-
-        if (isNew) {
-            console.log('[ST-Copilot-Debug] Lorebook is new. Requesting ST to create...');
-            if (typeof getSTWorldInfo()?.createNewWorldInfo === 'function') {
-                await getSTWorldInfo().createNewWorldInfo(bookName);
-            } else if (typeof window.createNewWorldInfo === 'function') {
-                await window.createNewWorldInfo(bookName);
-            } else {
-                const payload = { entries: {}, extensions: {} };
-                await fetch('/api/worldinfo/edit', {
-                    method: 'POST',
-                    headers: { ...ctx.getRequestHeaders(), 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: bookName, data: payload }),
-                });
-                if (typeof ctx.updateWorldInfoList === 'function') await ctx.updateWorldInfoList();
-                else if (typeof window.loadWorldInfoList === 'function') await window.loadWorldInfoList();
-            }
-            toastr.success(`Lorebook "${escHtml(bookName)}" created successfully.`, EXT_DISPLAY);
-        }
-
-        delete _wiCache[bookName];
+        if (typeof ctx.updateWorldInfoList === 'function') await ctx.updateWorldInfoList();
+        else if (typeof window.loadWorldInfoList === 'function') await window.loadWorldInfoList();
 
         const charId = ctx.characterId;
         if (charId === undefined || charId === null) return;
@@ -643,16 +635,16 @@ export async function bindNewLorebookToCharacter(bookName) {
             else if (typeof window.printWorldInfoCharacters === 'function') window.printWorldInfoCharacters();
         }
     } catch (e) {
-        console.error(`[ST-Copilot-Debug] Exception in bindNewLorebookToCharacter:`, e);
+        console.warn(`[${EXT_DISPLAY}] Saved "${bookName}" but could not link it to the character:`, e);
     }
 }
 
-export async function resolveLBChangeTarget(change, strictBook = false) {
+export async function resolveLBChangeTarget(change, strictBook = false, loadBook = fetchWorldInfoBook) {
     let bookName = change.worldName || '';
     let targetUid = change.uid;
 
     const fuzzyWorld = bookName.toLowerCase();
-    const fuzzyName = (change.originalName || change.name || '').toLowerCase();
+    const fuzzyName = (change.originalName || change.name || '').trim().toLowerCase();
     
     if (fuzzyName && !strictBook) {
         const activeMatch = _lastActiveEntries.find(le => {
@@ -668,31 +660,33 @@ export async function resolveLBChangeTarget(change, strictBook = false) {
 
     if (bookName === getDisplayName(EMBEDDED_BOOK_KEY)) bookName = EMBEDDED_BOOK_KEY;
 
-    let data = await fetchWorldInfoBook(bookName);
+    let data = await loadBook(bookName);
     if (!data && bookName && !strictBook) {
         const allActive = getActiveLorebookNames();
         const match = allActive.find(n => n.toLowerCase() === fuzzyWorld || n.toLowerCase().includes(fuzzyWorld) || fuzzyWorld.includes(n.toLowerCase()));
         if (match) {
             bookName = match;
-            data = await fetchWorldInfoBook(bookName);
+            data = await loadBook(bookName);
         }
     }
 
     let origEntry = null;
     if (data && data.entries) {
-        origEntry = Object.values(data.entries).find(en => {
-            if (targetUid != null && String(en.uid) === String(targetUid)) return true;
-            if (!fuzzyName) return false;
-            const cStr = (en.comment || `Entry #${en.uid}`).trim().toLowerCase();
-            if (cStr === fuzzyName) return true;
-            return cStr.includes(fuzzyName) || fuzzyName.includes(cStr);
-        });
+        const entries = Object.values(data.entries);
+        const entryName = entry => (entry.comment || `Entry #${entry.uid}`).trim().toLowerCase();
+        origEntry = targetUid == null ? null : entries.find(entry => String(entry.uid) === String(targetUid));
+        if (!origEntry && fuzzyName && (!strictBook || targetUid == null)) {
+            origEntry = entries.find(entry => entryName(entry) === fuzzyName);
+            if (!origEntry && !strictBook) {
+                origEntry = entries.find(entry => entryName(entry).includes(fuzzyName) || fuzzyName.includes(entryName(entry)));
+            }
+        }
     }
 
     if (!origEntry && fuzzyName && !strictBook) {
         for (const name of getActiveLorebookNames()) {
             if (name === bookName) continue;
-            const bd = await fetchWorldInfoBook(name);
+            const bd = await loadBook(name);
             if (!bd) continue;
             origEntry = Object.values(bd.entries).find(en => {
                 const c = (en.comment || `Entry #${en.uid}`).trim().toLowerCase();
@@ -778,194 +772,163 @@ export function logLBHistoryChanges(changes, statusStr, afterMsgId = null) {
     } catch (_) {}
 }
 
-export async function applyLBChanges(changes, afterMsgId = null) {
-    console.log(`[${EXT_DISPLAY}] applyLBChanges: processing ${changes.length} change(s)`, JSON.parse(JSON.stringify(changes)));
-    const bookCache = {};
-    const successfulChanges =[];
+export function applyLBChanges(changes, afterMsgId = null) {
+    const result = _proposalWrites.then(() => applyProposalChanges(changes, afterMsgId));
+    _proposalWrites = result.catch(() => {});
+    return result;
+}
+
+async function applyProposalChanges(changes, afterMsgId) {
+    const books = new Map();
+    const loadBook = async name => {
+        if (!name) return null;
+        if (name === EMBEDDED_BOOK_KEY) return getEmbeddedCharBook();
+        if (!books.has(name)) {
+            const response = await requestWorldInfo('get', { name });
+            books.set(name, { data: await response.json(), changes: [] });
+        }
+        return books.get(name).data;
+    };
+
+    const reportFailure = (label, error) => {
+        toastr.error(`[LB] ${label}: ${error.message}`, EXT_DISPLAY, { timeOut: 12000, escapeHtml: true });
+        console.error(`[${EXT_DISPLAY}] ${label}:`, error);
+    };
 
     for (const change of changes) {
-        let { bookName, data, origEntry } = await resolveLBChangeTarget(change);
-
-        if (change.worldName && change.action !== 'delete') {
-            const activeBooks = getActiveLorebookNames();
-            
-            if (!activeBooks.includes(change.worldName)) {
-                await bindNewLorebookToCharacter(change.worldName);
-                
-                const resolved = await resolveLBChangeTarget(change);
-                bookName = resolved.bookName;
-                data = resolved.data;
-                origEntry = resolved.origEntry;
-            }
-        }
-
-        if (!data) {
-            const msg = `Lorebook not found: "${change.worldName || '(empty)'}" — is it active in this chat?`;
-            toastr.error(`[LB] ${msg}`, EXT_DISPLAY, { timeOut: 10000 });
-            console.error(`[${EXT_DISPLAY}] applyLBChanges: ${msg}`, change);
-            continue;
-        }
-        if (!bookName) {
-            toastr.error(`[LB] Could not resolve book name for change: "${change.name || change.uid || '?'}"`, EXT_DISPLAY, { timeOut: 10000 });
-            continue;
-        }
-
-if (change.action === 'add') {
-const uids = Object.keys(data.entries).map(Number);
-const newUid = uids.length ? Math.max(...uids) + 1 : 1;
-const isOutlet = !!(change.outlet || change.outlet_name);
-const outletName = (change.outlet_name || '').trim();
-
-// FIXED: Only clear triggers if it's an outlet AND no triggers were explicitly provided
-const addTriggers = isOutlet 
-    ? (Array.isArray(change.triggers) && change.triggers.length > 0 ? change.triggers : [])
-    : (Array.isArray(change.triggers) ? change.triggers : []);
-
-const autoConstant = !isOutlet && addTriggers.length === 0 && change.constant !== false;
-
-data.entries[newUid] = {
-    uid: newUid,
-    key: addTriggers,  // FIXED: Now preserves triggers even for outlets
-    keysecondary: [],
-    content: change.content || '',
-    comment: change.name || '',
-    disable: false,
-    group: change.group || '',  // FIXED: Don't auto-set group to outlet name
-    selective: false,
-    constant: !isOutlet && (change.constant === true || autoConstant),
-    position: isOutlet ? 7 : (change.position ?? 0),
-    depth: 4,
-    displayIndex: newUid,
-    automation_id: outletName,  // This is the correct field for outlet name
-    outletName: outletName,     // Backup field
-    outlet: isOutlet,  // Boolean flag only — the NAME lives in automation_id/outletName, never here
-    
-    order: change.order ?? 100,
-    probability: change.probability ?? 100,
-    groupWeight: change.groupWeight ?? 100,
-    useProbability: true,
-    addMemo: true,
-    groupOverride: false,
-    prevent_recursion: false,
-    delayUntilRecursion: false,
-    scan_depth: null,
-    match_whole_words: null,
-    use_group_scoring: false,
-    case_sensitive: null,
-    role: null,
-    vectorized: false,
-    sticky: 0,
-    cooldown: 0,
-    delay: 0,
-    excludeRecursion: false,
-    ignoreBudget: false,
-};
-
-console.log(`[${EXT_DISPLAY}] applyLBChanges: ADD uid=${newUid} in "${bookName}" constant=${data.entries[newUid].constant} outlet=${isOutlet} triggers=${addTriggers.length}`);
-bookCache[bookName] = data;
-_wiCache[bookName] = data;
-successfulChanges.push(change);
-} else if (change.action === 'edit') {
-            if (!origEntry) {
-                const msg = `Entry not found for edit: "${change.name || change.uid || '?'}" in "${bookName}"`;
-                toastr.error(`[LB] ${msg}`, EXT_DISPLAY, { timeOut: 10000 });
-                console.error(`[${EXT_DISPLAY}] applyLBChanges: ${msg}. Available:`, Object.values(data.entries || {}).map(e => ({ uid: e.uid, comment: e.comment })));
-                continue;
-            }
-            if (change.name !== undefined) origEntry.comment = change.name;
-            if (change.triggers !== null && change.triggers !== undefined) {
-                origEntry.key = change.triggers;
-                if (change.triggers.length === 0 && origEntry.key.length === 0 && change.constant !== false) {
-                    origEntry.constant = true;
-                }
-            }
-            if (change.content !== undefined) origEntry.content = change.content;
-            if (change.constant !== undefined) origEntry.constant = !!change.constant;
-if (change.outlet!== undefined || change.outlet_name!== undefined) {
-const eOutletName = (change.outlet_name || '').trim();
-if (change.outlet || eOutletName) {
-origEntry.position = 7;
-origEntry.automation_id = eOutletName;
-origEntry.outletName = eOutletName;
-origEntry.outlet = true;  // Boolean flag only — name lives in automation_id/outletName above
-origEntry.group = eOutletName;
-origEntry.constant = false;
-if (origEntry.extensions) origEntry.extensions.outlet_name = eOutletName;
-else origEntry.extensions = { outlet_name: eOutletName };
-} else {
-origEntry.position = change.position?? 0;
-origEntry.automation_id = '';
-origEntry.outletName = '';
-origEntry.outlet = false;
-origEntry.group = '';
-if (origEntry.extensions) origEntry.extensions.outlet_name = '';
-}
-}
-            console.log(`[${EXT_DISPLAY}] applyLBChanges: EDIT uid=${origEntry.uid} in "${bookName}"`);
-            bookCache[bookName] = data;
-            _wiCache[bookName] = data;
-            successfulChanges.push(change);
-        } else if (change.action === 'patch') {
-            if (!origEntry) {
-                const msg = `Entry not found for patch: "${change.name || change.uid || '?'}" in "${bookName}"`;
-                toastr.error(`[LB] ${msg}`, EXT_DISPLAY, { timeOut: 10000 });
-                continue;
-            }
-            let current = origEntry.content || '';
-            let allMatched = true;
-            for (const patch of (change.patches || [])) {
-                const { result, matched } = applySearchReplaceToField(current, patch.search || '', patch.replace || '');
-                if (!matched) {
-                    toastr.warning(`[LB] SEARCH not found in "${origEntry.comment}": "${(patch.search || '').slice(0, 60)}"`, EXT_DISPLAY, { timeOut: 8000 });
-                    allMatched = false;
-                    break;
-                }
-                current = result;
-            }
-            if (!allMatched) continue;
-            origEntry.content = current;
-            if (change.name !== undefined) origEntry.comment = change.name;
-            if (change.triggers !== null && change.triggers !== undefined) {
-                origEntry.key = change.triggers;
-                if (change.triggers.length === 0 && change.constant !== false) origEntry.constant = true;
-            }
-            if (change.constant !== undefined) origEntry.constant = !!change.constant;
-            console.log(`[${EXT_DISPLAY}] applyLBChanges: PATCH uid=${origEntry.uid} in "${bookName}"`);
-            bookCache[bookName] = data;
-            _wiCache[bookName] = data;
-            successfulChanges.push(change);
-        } else if (change.action === 'delete') {
-            if (!origEntry) {
-                toastr.warning(`[LB] Entry not found for delete: "${change.name || change.uid || '?'}" in "${bookName}"`, EXT_DISPLAY, { timeOut: 8000 });
-                continue;
-            }
-            delete data.entries[origEntry.uid];
-            console.log(`[${EXT_DISPLAY}] applyLBChanges: DELETE uid=${origEntry.uid} in "${bookName}"`);
-            bookCache[bookName] = data;
-            _wiCache[bookName] = data;
-            successfulChanges.push(change);
-        } else {
-            toastr.warning(`[LB] Unknown action: "${change.action}"`, EXT_DISPLAY, { timeOut: 6000 });
-        }
-    }
-
-    if (changes.length > 0 && !Object.keys(bookCache).length) {
-        toastr.warning('[LB] No changes were applied — see browser console (F12) for details', EXT_DISPLAY, { timeOut: 10000 });
-        return;
-    }
-
-    for (const [name, data] of Object.entries(bookCache)) {
+        const label = change.name || change.originalName || change.uid || '?';
         try {
-            await saveWorldInfoBook(name, data);
-            console.log(`[${EXT_DISPLAY}] applyLBChanges: saved "${name}" OK`);
-        } catch (e) {
-            toastr.error(`[LB] Save failed for "${name}": ${e.message}`, EXT_DISPLAY, { timeOut: 12000 });
-            console.error(`[${EXT_DISPLAY}] applyLBChanges: save error for "${name}":`, e);
+            const { bookName, data, origEntry } = await resolveLBChangeTarget(change, Boolean(change.worldName), loadBook);
+            if (!bookName || !data?.entries) throw new Error(`Lorebook "${change.worldName || '(unspecified)'}" was not found.`);
+            if (data._embedded) throw new Error('Choose an external lorebook. Embedded character books are read-only here.');
+            if (!['add', 'edit', 'patch', 'delete'].includes(change.action)) throw new Error(`Unknown action "${change.action}".`);
+            if (change.action !== 'add' && !origEntry) {
+                throw new Error(`Entry not found in "${bookName}". Create the entry first or select the correct entry.`);
+            }
+
+            if (change.action === 'add') {
+                addProposalEntry(data.entries, change);
+            } else if (change.action === 'delete') {
+                delete data.entries[origEntry.uid];
+            } else {
+                updateProposalEntry(origEntry, change);
+            }
+
+            books.get(bookName).changes.push(change);
+        } catch (error) {
+            reportFailure(`Could not ${change.action} "${label}"`, error);
         }
     }
 
-    if (successfulChanges.length > 0) {
-        recordStat(STAT.lb, successfulChanges.length);
-        logLBHistoryChanges(successfulChanges, 'Accepted', afterMsgId);
+    const confirmed = new Set();
+    for (const [name, book] of books) {
+        if (!book.changes.length) continue;
+        try {
+            await saveWorldInfoBook(name, book.data);
+            book.changes.forEach(change => confirmed.add(change));
+        } catch (error) {
+            reportFailure(`Could not confirm save for "${name}"`, error);
+            continue;
+        }
+        if (book.changes.some(change => change.action === 'add' && change.worldName)
+            && !getActiveLorebookNames().includes(name)) {
+            await bindSavedLorebookToCharacter(name);
+        }
+    }
+
+    if (confirmed.size) {
+        try {
+            recordStat(STAT.lb, confirmed.size);
+            logLBHistoryChanges(changes.filter(change => confirmed.has(change)), 'Accepted', afterMsgId);
+        } catch (error) {
+            console.warn(`[${EXT_DISPLAY}] Lorebook saved but could not record proposal history:`, error);
+        }
+    }
+    return confirmed;
+}
+
+function addProposalEntry(entries, change) {
+    const uids = Object.keys(entries).map(Number).filter(Number.isFinite);
+    const uid = uids.length ? Math.max(...uids) + 1 : 1;
+    const isOutlet = Boolean(change.outlet || change.outlet_name);
+    const outletName = (change.outlet_name || '').trim();
+    const triggers = Array.isArray(change.triggers) ? change.triggers : [];
+    const entry = {
+        uid,
+        key: triggers,
+        keysecondary: [],
+        content: change.content || '',
+        comment: change.name || '',
+        disable: false,
+        group: change.group || '',
+        selective: false,
+        constant: !isOutlet && (change.constant === true || (!triggers.length && change.constant !== false)),
+        position: isOutlet ? 7 : (change.position ?? 0),
+        depth: 4,
+        displayIndex: uid,
+        automation_id: outletName,
+        outletName,
+        outlet: isOutlet,
+        order: change.order ?? 100,
+        probability: change.probability ?? 100,
+        groupWeight: change.groupWeight ?? 100,
+        useProbability: true,
+        addMemo: true,
+        groupOverride: false,
+        prevent_recursion: false,
+        delayUntilRecursion: false,
+        scan_depth: null,
+        match_whole_words: null,
+        use_group_scoring: false,
+        case_sensitive: null,
+        role: null,
+        vectorized: false,
+        sticky: 0,
+        cooldown: 0,
+        delay: 0,
+        excludeRecursion: false,
+        ignoreBudget: false,
+    };
+
+    // An interrupted read-back may leave an Add pending after the server saved it.
+    const alreadyPresent = Object.values(entries).some(existing =>
+        JSON.stringify(existing) === JSON.stringify({ ...entry, uid: existing.uid, displayIndex: existing.displayIndex }));
+    if (!alreadyPresent) entries[uid] = entry;
+}
+
+function updateProposalEntry(entry, change) {
+    if (change.action === 'patch') {
+        let content = entry.content || '';
+        for (const patch of (change.patches || [])) {
+            const { result, matched } = applySearchReplaceToField(content, patch.search || '', patch.replace || '');
+            if (!matched) throw new Error(`Search text not found in "${entry.comment}": "${(patch.search || '').slice(0, 60)}".`);
+            content = result;
+        }
+        entry.content = content;
+    } else if (change.content !== undefined) {
+        entry.content = change.content;
+    }
+
+    if (change.name !== undefined) entry.comment = change.name;
+    if (Array.isArray(change.triggers)) {
+        entry.key = change.triggers;
+        if (!change.triggers.length && change.constant !== false) entry.constant = true;
+    }
+    if (change.constant !== undefined) entry.constant = Boolean(change.constant);
+
+    if (change.action === 'edit' && (change.outlet !== undefined || change.outlet_name !== undefined)) {
+        const name = (change.outlet_name || '').trim();
+        const isOutlet = Boolean(change.outlet || name);
+        entry.position = isOutlet ? 7 : (change.position ?? 0);
+        entry.automation_id = isOutlet ? name : '';
+        entry.outletName = entry.automation_id;
+        entry.outlet = isOutlet;
+        entry.group = entry.automation_id;
+        if (isOutlet) {
+            entry.constant = false;
+            entry.extensions = { ...entry.extensions, outlet_name: name };
+        } else if (entry.extensions) {
+            entry.extensions.outlet_name = '';
+        }
     }
 }

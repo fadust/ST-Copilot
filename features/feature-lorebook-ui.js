@@ -62,6 +62,7 @@ export function renderProposalCard(changes, msgEl) {
 
     const editableChanges = changes.map(c => ({ ...c }));
     const itemStates = editableChanges.map(() => 'pending');
+    let applying = false;
     const actionLabels = { add: '+ Add', edit: '✎ Edit', patch: '✂ Patch', delete: '✕ Remove' };
 
     const card = document.createElement('div');
@@ -111,6 +112,7 @@ export function renderProposalCard(changes, msgEl) {
     dismissBtn.className = 'scp-lb-proposal-dismiss';
     dismissBtn.innerHTML = ICONS.x; dismissBtn.title = 'Dismiss';
     dismissBtn.addEventListener('click', () => {
+        if (applying) return;
         const dismissedChanges = editableChanges.filter((_, i) => itemStates[i] === 'pending');
         if (dismissedChanges.length > 0) {
             logLBHistoryChanges(dismissedChanges, 'Dismissed', card.dataset.for);
@@ -368,22 +370,12 @@ export function renderProposalCard(changes, msgEl) {
         applyItemBtn.title = 'Apply this change'; applyItemBtn.textContent = '✓';
         applyItemBtn.addEventListener('click', async e => {
             e.stopPropagation();
-            if (itemStates[ci] !== 'pending') return;
+            if (applying || itemStates[ci] !== 'pending') return;
             closeEditPanel();
             applyItemBtn.disabled = true; applyItemBtn.textContent = '…';
-            try {
-                await applyLBChanges([editableChanges[ci]], card.dataset.for);
-                itemStates[ci] = 'applied';
-                item.classList.add('scp-lb-item-applied');
-                itemBtns.querySelectorAll('button').forEach(b => { b.disabled = true; });
-                clearWiCache();
-                persistState(); updateCountBadge(); updateFooterBtns(); 
-                syncBlockToMessage()
-                checkAllResolved();
-            } catch (err) {
-                toastr.error(`Failed: ${err.message}`, EXT_DISPLAY);
-                applyItemBtn.disabled = false; applyItemBtn.textContent = '✓';
-            }
+            await applyPending([editableChanges[ci]]);
+            applyItemBtn.disabled = itemStates[ci] !== 'pending';
+            applyItemBtn.textContent = '✓';
         });
 
         const rejectItemBtn = document.createElement('button');
@@ -391,7 +383,7 @@ export function renderProposalCard(changes, msgEl) {
         rejectItemBtn.title = 'Reject this change'; rejectItemBtn.textContent = '✕';
         rejectItemBtn.addEventListener('click', e => {
             e.stopPropagation();
-            if (itemStates[ci] !== 'pending') return;
+            if (applying || itemStates[ci] !== 'pending') return;
             closeEditPanel();
             itemStates[ci] = 'rejected';
             item.classList.add('scp-lb-item-rejected');
@@ -617,23 +609,37 @@ export function renderProposalCard(changes, msgEl) {
         rejectAllBtn.style.display = p > 0 ? '' : 'none';
     };
 
-    applyAllBtn.addEventListener('click', async () => {
-        const pending = editableChanges.filter((_, i) => itemStates[i] === 'pending');
-        if (!pending.length) return;
+    const applyPending = async pending => {
+        if (applying || !pending.length) return;
+        applying = true;
         applyAllBtn.disabled = true; applyAllBtn.textContent = 'Applying…';
         try {
-            await applyLBChanges(pending, card.dataset.for);
-            itemStates.forEach((s, i) => { if (s === 'pending') { itemStates[i] = 'applied'; itemEls[i].classList.add('scp-lb-item-applied'); itemEls[i].querySelectorAll('button').forEach(b => { b.disabled = true; }); } });
-            clearWiCache();
-            persistState(); updateCountBadge(); updateFooterBtns(); 
-            checkAllResolved();
+            const confirmed = await applyLBChanges(pending, card.dataset.for);
+            editableChanges.forEach((change, i) => {
+                if (!confirmed.has(change)) return;
+                itemStates[i] = 'applied';
+                itemEls[i].classList.add('scp-lb-item-applied');
+                itemEls[i].querySelectorAll('button').forEach(button => { button.disabled = true; });
+            });
+            updateCountBadge();
+            updateFooterBtns();
+            if (getPendingCount()) syncBlockToMessage();
+            else checkAllResolved();
         } catch (e) {
-            toastr.error(`Failed: ${e.message}`, EXT_DISPLAY);
+            toastr.error(`Failed: ${e.message}`, EXT_DISPLAY, { escapeHtml: true });
+        } finally {
+            applying = false;
             applyAllBtn.disabled = false; applyAllBtn.textContent = 'Apply All';
         }
+    };
+
+    applyAllBtn.addEventListener('click', () => {
+        const pending = editableChanges.filter((_, i) => itemStates[i] === 'pending');
+        return applyPending(pending);
     });
 
     rejectAllBtn.addEventListener('click', () => {
+        if (applying) return;
         const rejectedChanges = [];
         itemStates.forEach((s, i) => {
             if (s === 'pending') {
