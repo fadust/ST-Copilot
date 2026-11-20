@@ -29,7 +29,7 @@ import { escHtml, showCustomDialog, copyText } from '../utils/util-dom.js';
 import { getSettings, saveSettings } from '../settings.js';
 import { getCurrentSession, saveSessionsToMetadata } from '../session.js';
 import {
-    EMBEDDED_BOOK_KEY, fetchWorldInfoBook, saveWorldInfoBook, getDisplayName,
+    EMBEDDED_BOOK_KEY, fetchWorldInfoBook, editWorldInfoBook, saveWorldInfoBook, getDisplayName,
     getActiveLorebookNames, getBookSourceType, wiEntriesToArray, getEntryOverrideKey,
     buildLorebookContextBlock, stripLBChangesBlock, resolveLBChangeTarget,
     logLBHistoryChanges, applyLBChanges, getWiCache as _getWiCache,
@@ -37,6 +37,7 @@ import {
 } from './feature-lorebook-engine.js';
 import { openDiffModal, reconstructLBChangesBlock } from './feature-chatedit-engine.js';
 import { updateMsgCount as _updateMsgCount } from '../ui/ui-chat.js';
+import { getSTWorldInfo } from '../state.js';
 
 // ── Injected forward dep (see header note) ──────────────────────────────────
 let _applyCustomTheme = () => {};
@@ -801,6 +802,7 @@ export async function renderEntryList(bookName, search = '') {
     if (!data) { container.innerHTML = '<div class="scp-lb-empty-state">Failed to load lorebook</div>'; return; }
 
     const entries = wiEntriesToArray(data);
+    const [sort, direction] = (document.getElementById('scp-lb-sort')?.value || 'list').split('-');
     const s = getSettings();
     const overrides = s.lorebookEntryOverrides || {};
     const isBookSelected = (s.lorebookSelectedBooks || []).includes(bookName);
@@ -813,6 +815,13 @@ export async function renderEntryList(bookName, search = '') {
             || (e.content || '').toLowerCase().includes(lowerSearch)
             || (e.key || []).join(' ').toLowerCase().includes(lowerSearch);
     }) : entries;
+    const metric = entrySortValue[sort];
+    if (metric) {
+        const sign = direction === 'desc' ? -1 : 1;
+        filtered.sort((a, b) => sign * (sort === 'strategy'
+            ? metric(a).localeCompare(metric(b))
+            : metric(a) - metric(b)));
+    }
 
     const label = document.getElementById('scp-lb-entries-label');
     if (label) label.textContent = `${getDisplayName(bookName)} — ${filtered.length}${filtered.length !== entries.length ? ` of ${entries.length}` : ''} entr${filtered.length !== 1 ? 'ies' : 'y'}`;
@@ -840,13 +849,14 @@ export async function renderEntryList(bookName, search = '') {
                 <span class="scp-lb-entry-name">${escHtml(entry.comment || `#${entry.uid}`)}${isInCtx ? ' <span class="scp-lb-in-ctx-badge">in context</span>' : ''}</span>
                 <span class="scp-lb-entry-keys">${entry.key?.slice(0, 5).map(k => escHtml(k)).join(' · ') || '—'}</span>
             </div>
+            ${metric ? `<span class="scp-lb-sort-value">${escHtml(String(metric(entry)))}${sort === 'probability' ? '%' : ''}</span>` : ''}
             <div class="scp-lb-entry-actions">
                 <button class="scp-lb-entry-toggle-btn ${indClass}" title="Cycle: Default → Force On → Force Off">${btnText}</button>
                 <button class="scp-lb-entry-view-btn" title="View / Edit">${ICONS.edit}</button>
             </div>`;
         row.querySelector('.scp-lb-entry-toggle-btn').addEventListener('click', e => { e.stopPropagation(); cycleEntryOverride(bookName, entry, row); });
-        row.querySelector('.scp-lb-entry-view-btn').addEventListener('click', e => { e.stopPropagation(); showEntryDetail(entry, bookName); });
-        row.addEventListener('click', () => showEntryDetail(entry, bookName));
+        row.querySelector('.scp-lb-entry-view-btn').addEventListener('click', e => { e.stopPropagation(); showEntryDetail(entry, bookName, data); });
+        row.addEventListener('click', () => showEntryDetail(entry, bookName, data));
         frag.appendChild(row);
     }
     container.innerHTML = '';
@@ -896,7 +906,37 @@ export function cycleEntryOverride(bookName, entry, rowEl) {
     _updateMsgCount(getCurrentSession());
 }
 
-export function showEntryDetail(entry, bookName) {
+function entryStrategy(entry) {
+    if (entry.constant === true) return 'constant';
+    return entry.vectorized === true ? 'vectorized' : 'normal';
+}
+
+const entrySortValue = {
+    strategy: entry => ({ normal: 'Normal', constant: 'Constant', vectorized: 'Vectorized' })[entryStrategy(entry)],
+    depth: entry => Number(entry.depth ?? 4),
+    order: entry => Number(entry.order ?? 100),
+    probability: entry => entry.useProbability === false ? 100 : Number(entry.probability ?? 100),
+};
+
+const entryControlIds = {
+    list: 'scp-lb-list-position', strategy: 'scp-lb-entry-strategy', position: 'scp-lb-entry-position',
+    depth: 'scp-lb-entry-depth', order: 'scp-lb-entry-order', probability: 'scp-lb-entry-probability',
+};
+
+function entryControls() {
+    return Object.fromEntries(Object.entries(entryControlIds).map(([key, id]) => [key, document.getElementById(id)]));
+}
+
+function syncEntryDepth(controls) {
+    controls.depth.disabled = controls.position.disabled || !controls.position.value.startsWith('4:');
+}
+
+function setEntryField(data, entry, field, value, nativeField = field) {
+    entry[field] = value;
+    getSTWorldInfo()?.setWIOriginalDataValue?.(data, entry.uid, nativeField, value);
+}
+
+export function showEntryDetail(entry, bookName, data = _getWiCache()[bookName]) {
     _lbEntryDetailEntry = entry;
     _lbEntryDetailBook = bookName;
     document.getElementById('scp-lb-entry-detail').style.display = 'flex';
@@ -906,6 +946,25 @@ export function showEntryDetail(entry, bookName) {
     document.getElementById('scp-lb-detail-name').value = entry.comment || '';
     document.getElementById('scp-lb-detail-triggers').value = (entry.key || []).join(', ');
     document.getElementById('scp-lb-detail-content').value = entry.content || '';
+    const controls = entryControls();
+    const ordered = wiEntriesToArray(data);
+    const position = Number(entry.position ?? 0);
+    const readOnly = bookName === EMBEDDED_BOOK_KEY;
+    const values = {
+        list: ordered.findIndex(item => String(item.uid) === String(entry.uid)) + 1,
+        strategy: entryStrategy(entry),
+        position: position === 4 ? `4:${entry.role ?? 0}` : position,
+        depth: entrySortValue.depth(entry),
+        order: entrySortValue.order(entry),
+        probability: entrySortValue.probability(entry),
+    };
+    controls.list.max = String(ordered.length);
+    for (const [field, input] of Object.entries(controls)) {
+        input.value = String(values[field]);
+        input.dataset.savedValue = input.value;
+        input.disabled = readOnly;
+    }
+    syncEntryDepth(controls);
 
     const lbStatus = document.getElementById('scp-lb-detail-lb-status');
     if (lbStatus) {
@@ -927,6 +986,10 @@ export function showEntryDetail(entry, bookName) {
         };
     }
 
+    updateEntryInjectionControls(entry, bookName);
+}
+
+function updateEntryInjectionControls(entry, bookName) {
     const s = getSettings();
     const override = (s.lorebookEntryOverrides || {})[getEntryOverrideKey(bookName, entry)];
     ['scp-lb-inj-default', 'scp-lb-inj-force-on', 'scp-lb-inj-force-off'].forEach(id => document.getElementById(id)?.classList.remove('active'));
@@ -951,19 +1014,70 @@ export function showEntryDetail(entry, bookName) {
 export async function saveEntryDetail() {
     if (!_lbEntryDetailEntry || !_lbEntryDetailBook) return;
     if (_lbEntryDetailBook === EMBEDDED_BOOK_KEY) { toastr.warning('Cannot save embedded character book entries. Edit the character card in ST.', EXT_DISPLAY); return; }
-    const data = await fetchWorldInfoBook(_lbEntryDetailBook);
-    if (!data) { toastr.error('Failed to load book', EXT_DISPLAY); return; }
-    const entry = data.entries[_lbEntryDetailEntry.uid];
-    if (!entry) { toastr.error('Entry not found', EXT_DISPLAY); return; }
-    entry.comment = document.getElementById('scp-lb-detail-name')?.value || '';
-    entry.key = (document.getElementById('scp-lb-detail-triggers')?.value || '').split(',').map(t => t.trim()).filter(Boolean);
-    entry.content = document.getElementById('scp-lb-detail-content')?.value || '';
-    Object.assign(_lbEntryDetailEntry, entry);
-    await saveWorldInfoBook(_lbEntryDetailBook, data);
-    toastr.success('Entry saved', EXT_DISPLAY);
-    document.getElementById('scp-lb-detail-title').textContent = entry.comment || `Entry #${entry.uid}`;
-    renderEntryList(_lbEntryDetailBook, _lbSearchQuery);
-    _updateMsgCount(getCurrentSession());
+    const sourceEntry = _lbEntryDetailEntry;
+    const bookName = _lbEntryDetailBook;
+    const saveButton = document.getElementById('scp-lb-detail-save');
+    if (saveButton.disabled) return;
+    const layout = {};
+    for (const [field, input] of Object.entries(entryControls())) {
+        if (input.disabled || input.value === input.dataset.savedValue) continue;
+        if (!input.reportValidity()) return;
+        layout[field] = input.value;
+    }
+    const name = document.getElementById('scp-lb-detail-name').value;
+    const keys = document.getElementById('scp-lb-detail-triggers').value.split(',').map(key => key.trim()).filter(Boolean);
+    const content = document.getElementById('scp-lb-detail-content').value;
+    saveButton.disabled = true;
+    try {
+        const { data, entry } = await editWorldInfoBook(bookName, data => {
+            const entry = data?.entries?.[sourceEntry.uid];
+            if (!entry) throw new Error('This entry no longer exists. Refresh the lorebook list.');
+
+            if (layout.list !== undefined) {
+                const ordered = wiEntriesToArray(data);
+                const index = Number(layout.list) - 1;
+                if (index >= ordered.length) throw new Error(`List position must be between 1 and ${ordered.length}.`);
+                const currentIndex = ordered.indexOf(entry);
+                if (currentIndex !== index) {
+                    ordered.splice(currentIndex, 1);
+                    ordered.splice(index, 0, entry);
+                    ordered.forEach((item, displayIndex) => {
+                        if (item.displayIndex !== displayIndex) setEntryField(data, item, 'displayIndex', displayIndex, 'extensions.display_index');
+                    });
+                }
+            }
+            if (layout.strategy !== undefined) {
+                setEntryField(data, entry, 'constant', layout.strategy === 'constant');
+                setEntryField(data, entry, 'vectorized', layout.strategy === 'vectorized', 'extensions.vectorized');
+            }
+            if (layout.position !== undefined) {
+                const [position, role] = layout.position.split(':').map(Number);
+                setEntryField(data, entry, 'position', position, 'extensions.position');
+                setEntryField(data, entry, 'role', position === 4 ? role : null, 'extensions.role');
+                getSTWorldInfo()?.setWIOriginalDataValue?.(data, entry.uid, 'position', position === 0 ? 'before_char' : 'after_char');
+            }
+            if (layout.depth !== undefined) setEntryField(data, entry, 'depth', Number(layout.depth), 'extensions.depth');
+            if (layout.order !== undefined) setEntryField(data, entry, 'order', Number(layout.order), 'insertion_order');
+            if (layout.probability !== undefined) {
+                setEntryField(data, entry, 'probability', Number(layout.probability), 'extensions.probability');
+                setEntryField(data, entry, 'useProbability', true, 'extensions.useProbability');
+            }
+            if (name !== (sourceEntry.comment || '')) setEntryField(data, entry, 'comment', name);
+            if (keys.join(', ') !== (sourceEntry.key || []).join(', ')) setEntryField(data, entry, 'key', keys, 'keys');
+            if (content !== (sourceEntry.content || '')) setEntryField(data, entry, 'content', content);
+            return entry;
+        });
+        toastr.success('Entry saved', EXT_DISPLAY);
+        if (_lbEntryDetailEntry === sourceEntry && _lbActiveBook === bookName && document.getElementById('scp-lb-entry-detail').style.display !== 'none') {
+            showEntryDetail(entry, bookName, data);
+        }
+        if (_lbActiveBook === bookName) await renderEntryList(bookName, _lbSearchQuery);
+        _updateMsgCount(getCurrentSession());
+    } catch (error) {
+        toastr.error(`Entry could not be saved: ${error.message}`, EXT_DISPLAY, { escapeHtml: true });
+    } finally {
+        saveButton.disabled = false;
+    }
 }
 
 export async function deleteEntryDetail() {
@@ -1004,7 +1118,7 @@ export async function addNewEntry() {
     await saveWorldInfoBook(_lbActiveBook, data);
     toastr.success('Entry created', EXT_DISPLAY);
     await renderEntryList(_lbActiveBook, _lbSearchQuery);
-    showEntryDetail(newEntry, _lbActiveBook);
+    showEntryDetail(newEntry, _lbActiveBook, data);
 }
 
 export function updateLBFooterInfo() {
@@ -1063,6 +1177,10 @@ export function setupLorebookManagerListeners() {
         clearTimeout(_lbSearchTid);
         _lbSearchTid = setTimeout(() => { if (_lbActiveBook) renderEntryList(_lbActiveBook, _lbSearchQuery); }, 200);
     });
+    document.getElementById('scp-lb-sort')?.addEventListener('change', () => {
+        if (_lbActiveBook) renderEntryList(_lbActiveBook, _lbSearchQuery);
+    });
+    document.getElementById('scp-lb-entry-position')?.addEventListener('change', () => syncEntryDepth(entryControls()));
 
     document.getElementById('scp-lb-enable-all')?.addEventListener('click', () => {
         if (!_lbActiveBook || !_getWiCache()[_lbActiveBook]) return;
@@ -1113,7 +1231,7 @@ export function setupLorebookManagerListeners() {
             saveSettings();
             ['scp-lb-inj-default', 'scp-lb-inj-force-on', 'scp-lb-inj-force-off'].forEach(bid => document.getElementById(bid)?.classList.remove('active'));
             document.getElementById(id)?.classList.add('active');
-            showEntryDetail(_lbEntryDetailEntry, _lbEntryDetailBook);
+            updateEntryInjectionControls(_lbEntryDetailEntry, _lbEntryDetailBook);
             _updateMsgCount(getCurrentSession());
         });
     });

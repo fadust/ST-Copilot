@@ -481,12 +481,13 @@ export function parseCharCreationFromText(text) {
     if (!raw) return null;
     try {
         const data = JSON.parse(raw);
-        if (typeof data !== 'object' || Array.isArray(data)) return null;
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
         if (data.tags) {
             data.tags = _sanitizeProposedTags(Array.isArray(data.tags) ? JSON.stringify(data.tags) : String(data.tags));
         }
         return data;
     } catch (_) {}
+    if (!strict) return null;
     try {
         const data = JSON.parse(repairJSON(raw));
         if (typeof data !== 'object' || Array.isArray(data)) return null;

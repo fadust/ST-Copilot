@@ -1759,6 +1759,10 @@ export async function runGenerate(session, userText, addUserMsg = true, processe
 
         _refreshSwipeBars(session);
 
+        if (result.incompleteProposal) {
+            toastr.warning('The proposal is incomplete. Use Continue response to finish it.', EXT_DISPLAY);
+        }
+
         if (tokensIn > 0) recordStat(STAT.tokIn, tokensIn);
         const tokensOut = await estimateTokens(fullText);
         if (tokensOut > 0) recordStat(STAT.tokOut, tokensOut);

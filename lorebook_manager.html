@@ -36,6 +36,16 @@
                 <div class="scp-lb-main-toolbar">
                     <span class="scp-lb-entries-label" id="scp-lb-entries-label">Select a lorebook</span>
                     <div class="scp-lb-main-actions" id="scp-lb-main-actions" style="display:none">
+                        <select class="scp-lb-detail-input scp-lb-sort" id="scp-lb-sort" aria-label="Sort entries">
+                            <option value="list">List order</option>
+                            <option value="strategy">Strategy</option>
+                            <option value="depth-asc">Depth (low first)</option>
+                            <option value="depth-desc">Depth (high first)</option>
+                            <option value="order-asc">Order (low first)</option>
+                            <option value="order-desc">Order (high first)</option>
+                            <option value="probability-asc">Trigger % (low first)</option>
+                            <option value="probability-desc">Trigger % (high first)</option>
+                        </select>
                         <button class="scp-lb-bulk-btn" id="scp-lb-enable-all">Force All On</button>
                         <button class="scp-lb-bulk-btn" id="scp-lb-disable-all">Force All Off</button>
                         <button class="scp-lb-bulk-btn" id="scp-lb-reset-overrides">Reset All</button>
@@ -75,6 +85,47 @@
                             <div class="scp-lb-detail-row scp-lb-detail-row-grow">
                                 <label class="scp-lb-detail-label">Content</label>
                                 <textarea class="scp-lb-detail-textarea" id="scp-lb-detail-content" placeholder="Entry content…"></textarea>
+                            </div>
+                            <div class="scp-lb-entry-controls">
+                                <div class="scp-lb-detail-row">
+                                    <label class="scp-lb-detail-label" for="scp-lb-list-position">List position</label>
+                                    <input type="number" class="scp-lb-detail-input" id="scp-lb-list-position" min="1" step="1" required title="Used when sorted by List order">
+                                </div>
+                                <div class="scp-lb-detail-row">
+                                    <label class="scp-lb-detail-label" for="scp-lb-entry-strategy">Strategy</label>
+                                    <select class="scp-lb-detail-input" id="scp-lb-entry-strategy">
+                                        <option value="normal">Normal</option>
+                                        <option value="constant">Constant</option>
+                                        <option value="vectorized">Vectorized</option>
+                                    </select>
+                                </div>
+                                <div class="scp-lb-detail-row scp-lb-placement">
+                                    <label class="scp-lb-detail-label" for="scp-lb-entry-position">Position</label>
+                                    <select class="scp-lb-detail-input" id="scp-lb-entry-position">
+                                        <option value="0">Before character definitions</option>
+                                        <option value="1">After character definitions</option>
+                                        <option value="2">Before Author’s Note</option>
+                                        <option value="3">After Author’s Note</option>
+                                        <option value="4:0">At depth (system)</option>
+                                        <option value="4:1">At depth (user)</option>
+                                        <option value="4:2">At depth (assistant)</option>
+                                        <option value="5">Before example messages</option>
+                                        <option value="6">After example messages</option>
+                                        <option value="7">Outlet</option>
+                                    </select>
+                                </div>
+                                <div class="scp-lb-detail-row">
+                                    <label class="scp-lb-detail-label" for="scp-lb-entry-depth">Depth</label>
+                                    <input type="number" class="scp-lb-detail-input" id="scp-lb-entry-depth" min="0" max="9999" step="1" required>
+                                </div>
+                                <div class="scp-lb-detail-row">
+                                    <label class="scp-lb-detail-label" for="scp-lb-entry-order">Order</label>
+                                    <input type="number" class="scp-lb-detail-input" id="scp-lb-entry-order" min="0" max="9999" step="1" required title="SillyTavern injection priority">
+                                </div>
+                                <div class="scp-lb-detail-row">
+                                    <label class="scp-lb-detail-label" for="scp-lb-entry-probability">Trigger %</label>
+                                    <input type="number" class="scp-lb-detail-input" id="scp-lb-entry-probability" min="0" max="100" step="any" required title="SillyTavern activation chance">
+                                </div>
                             </div>
                             <div class="scp-lb-detail-meta-row">
                                 <div class="scp-lb-detail-meta-item">

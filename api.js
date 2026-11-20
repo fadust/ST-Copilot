@@ -756,13 +756,50 @@ export function registerHtmlBlock(code) {
 }
 export function getHtmlBlock(id) { return _htmlBlockRegistry.get(id); }
 
+const jsonProposalTags = ['lorebook-changes', 'chat-changes', 'character-create'];
+
+function findUnfinishedProposal(text) {
+    let open = null;
+    for (const fence of text.matchAll(/^[ \t]*```([^\r\n]*)/gm)) {
+        const tag = fence[1].trim();
+        if (!open) {
+            open = { tag, start: fence.index, end: fence.index + fence[0].length };
+        } else if (!tag) {
+            open = null;
+        }
+    }
+    if (!open) return null;
+
+    const tag = jsonProposalTags.find(type => type === open.tag);
+    if (tag) return open;
+
+    // The stream can end partway through the name of the proposal fence.
+    if (open.tag.length >= 4 && !text.slice(open.end).trim()) {
+        const match = jsonProposalTags.find(type => type.startsWith(open.tag));
+        if (match && !'character-changes'.startsWith(open.tag)) return { ...open, tag: match };
+    }
+    return null;
+}
+
+function isCompleteProposalJson(tag, body) {
+    try {
+        const value = JSON.parse(body);
+        return tag === 'character-create'
+            ? typeof value?.name_suggestion === 'string' && value.name_suggestion.trim() !== ''
+            : Array.isArray(value?.changes);
+    } catch {
+        return false;
+    }
+}
+
+function isStopped(error, signal) {
+    return signal.aborted || error?.name === 'AbortError' || error?.message === 'userStopped';
+}
+
 export async function callGenerate(session, settings, pendingText, onChunk) {
     const ctx = SillyTavern.getContext();
     const messages = await assembleMessages(session, settings, pendingText);
     const maxTokens = parseInt(settings.maxTokens) || 8200;
-
-    const abort = new AbortController();
-    _abortController = abort;
 
     const service = ctx.ConnectionManagerRequestService;
     if (!service || typeof service.sendRequest !== 'function') {
@@ -862,28 +899,68 @@ export async function callGenerate(session, settings, pendingText, onChunk) {
         useStream = autoStream;
     }
 
-    let asyncGeneratorFn;
-    try {
-        asyncGeneratorFn = await service.sendRequest(profileId, messages, maxTokens, {
-            stream: useStream,
-            signal: abort.signal,
-            extractData: useStream, 
-            includePreset: true
-        });
-    } catch (e) {
-        _abortController = null;
-        if (abort.signal.aborted || e?.name === 'AbortError' || e?.message === 'userStopped') return null;
-        throw e;
-    }
+    const recoverProposal = useStream && !pendingText;
+    const abort = new AbortController();
+    _abortController = abort;
 
+    const send = (requestMessages, stream) => service.sendRequest(profileId, requestMessages, maxTokens, {
+        stream,
+        signal: abort.signal,
+        extractData: stream,
+        includePreset: true,
+    });
+
+    try {
+        const response = await send(messages, useStream);
+        const result = await readCompletion(response, abort.signal, onChunk, recoverProposal);
+        if (!result || abort.signal.aborted) return null;
+
+        const proposal = recoverProposal && findUnfinishedProposal(result.text);
+        if (!proposal) return result;
+
+        const body = result.text.slice(proposal.end).trim().replace(/\n`{1,2}$/, '');
+        if (isCompleteProposalJson(proposal.tag, body)) {
+            return { ...result, text: `${result.text.slice(0, proposal.start)}\`\`\`${proposal.tag}\n${body}\n\`\`\`` };
+        }
+
+        try {
+            const repairMessages = [
+                ...messages,
+                { role: 'assistant', content: result.text },
+                { role: 'user', content: `The last reply was interrupted during its ${proposal.tag} block. Return exactly one complete \`\`\`${proposal.tag} fenced block with strict JSON. Rewrite that block from the beginning, keeping the same intended edits and using the original request and context. Do not repeat the prose or any earlier complete blocks.` },
+            ];
+            const repair = await readCompletion(await send(repairMessages, false), abort.signal);
+            if (!repair || abort.signal.aborted) return null;
+
+            const block = repair.text.match(/^```([a-z-]+)[ \t]*\r?\n([\s\S]*?)\r?\n```$/);
+            if (block?.[1] === proposal.tag && isCompleteProposalJson(proposal.tag, block[2])) {
+                return { ...result, text: result.text.slice(0, proposal.start) + repair.text, isMaxTokens: false };
+            }
+        } catch (error) {
+            if (isStopped(error, abort.signal)) return null;
+            console.warn('[ST-Copilot] Interrupted proposal could not be recovered:', error);
+        }
+
+        return { ...result, incompleteProposal: true };
+    } catch (error) {
+        if (isStopped(error, abort.signal)) return null;
+        throw error;
+    } finally {
+        if (_abortController === abort) _abortController = null;
+    }
+}
+
+async function readCompletion(response, signal, onChunk, keepIncompleteProposal = false) {
     let text = '';
     let reasoning = null;
     let reasoningStartMs = null;
     let reasoningDone = false;
 
-    const isGen = typeof asyncGeneratorFn === 'function' ||
-        (asyncGeneratorFn != null && typeof asyncGeneratorFn[Symbol.asyncIterator] === 'function') ||
-        (asyncGeneratorFn != null && typeof asyncGeneratorFn.next === 'function');
+    let finishReason;
+    function trackFinish(value) {
+        finishReason = value?.finish_reason || value?.state?.finish_reason || value?.stop_reason
+            || value?.choices?.[0]?.finish_reason || value?.original_response?.choices?.[0]?.finish_reason || finishReason;
+    }
 
     // Couldnt get the reasoning block via "extractData: true" (maybe skill issue), so Im building my own extractor
     function deepExtract(obj) {
@@ -914,40 +991,24 @@ export async function callGenerate(session, settings, pendingText, onChunk) {
         return { t, r };
     }
 
-    let lastValue = null;
-
-    if (!isGen) {
-        const value = asyncGeneratorFn;
-        if (typeof value === 'string') {
-            text = value.trim();
-        } else {
-            const ext = deepExtract(value);
-            text = ext.t.trim();
-            reasoning = ext.r;
-            lastValue = value;
-        }
-        
-        const finishReason = lastValue?.finish_reason || lastValue?.state?.finish_reason || lastValue?.stop_reason;
-        const isMaxTokens = finishReason === 'length' || finishReason === 'max_tokens' || finishReason === 'stop_limit';
-
-        _abortController = null;
-        return { text, reasoning, isMaxTokens };
+    const gen = typeof response === 'function' ? response() : response?.[Symbol.asyncIterator]?.() ?? response;
+    if (typeof gen?.next !== 'function') {
+        const extracted = deepExtract(response);
+        trackFinish(response);
+        text = typeof response === 'string' ? response : extracted.t;
+        return { text: text.trim(), reasoning: extracted.r, isMaxTokens: reachedTokenLimit(finishReason) };
     }
-
-    const gen = typeof asyncGeneratorFn === 'function' ? asyncGeneratorFn() : asyncGeneratorFn;
 
     try {
         while (true) {
-            if (abort.signal.aborted) { _abortController = null; return null; }
+            if (signal.aborted) return null;
             const { value, done } = await gen.next();
-            if (done) {
-                if (value) lastValue = value;
-                break;
-            }
-            lastValue = value;
+            trackFinish(value);
+            if (signal.aborted) return null;
+            if (done) break;
 
             const ext = deepExtract(value);
-            text = ext.t;
+            if (ext.t) text = ext.t;
             const newReasoning = ext.r;
 
             if (newReasoning) {
@@ -963,15 +1024,14 @@ export async function callGenerate(session, settings, pendingText, onChunk) {
                 onChunk(text, reasoning, reasoningMs, reasoningDone);
             }
         }
-    } catch (e) {
-        _abortController = null;
-        if (abort.signal.aborted || e?.name === 'AbortError' || e?.message === 'userStopped') return null;
-        throw e;
+    } catch (error) {
+        if (isStopped(error, signal)) return null;
+        if (!keepIncompleteProposal || !findUnfinishedProposal(text)) throw error;
     }
 
-    const finishReason = lastValue?.finish_reason || lastValue?.state?.finish_reason || lastValue?.stop_reason;
-    const isMaxTokens = finishReason === 'length' || finishReason === 'max_tokens' || finishReason === 'stop_limit';
+    return { text: text.trim(), reasoning, isMaxTokens: reachedTokenLimit(finishReason) };
+}
 
-    _abortController = null;
-    return { text: text.trim(), reasoning, isMaxTokens };
+function reachedTokenLimit(reason) {
+    return reason === 'length' || reason === 'max_tokens' || reason === 'stop_limit';
 }

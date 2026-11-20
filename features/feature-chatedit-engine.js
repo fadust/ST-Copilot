@@ -366,6 +366,7 @@ export function parseChatChangesFromText(text) {
         const data = JSON.parse(raw);
         if (Array.isArray(data.changes)) return _sanitizeChatChanges(data.changes);
     } catch (_) {}
+    if (!strict) return null;
     try {
         const data = JSON.parse(repairJSON(raw));
         if (Array.isArray(data.changes)) return _sanitizeChatChanges(data.changes);

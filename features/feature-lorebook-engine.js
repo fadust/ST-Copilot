@@ -45,7 +45,7 @@ let _wiPromises = {};
 export const EMBEDDED_BOOK_KEY = '__char_embedded__';
 let _lastActiveEntries = [];
 let _regexModule = false;
-let _proposalWrites = Promise.resolve();
+let _lorebookWrites = Promise.resolve();
 
 // Accessors for feature-lorebook-ui.js — `_wiCache` and `_lastActiveEntries`
 // stay module-private `let` bindings (only this module can reassign them),
@@ -138,8 +138,14 @@ export function getEmbeddedCharBook() {
             disable: e.enabled === false,
             constant: !!e.constant,
             selective: !!e.selective,
-            position: e.position ?? 0,
-            displayIndex: uid,
+            position: e.extensions?.position ?? (e.position === 'after_char' ? 1 : Number(e.position) || 0),
+            role: e.extensions?.role,
+            depth: e.extensions?.depth,
+            order: e.insertion_order ?? e.order,
+            probability: e.extensions?.probability,
+            useProbability: e.extensions?.useProbability,
+            vectorized: e.extensions?.vectorized,
+            displayIndex: e.extensions?.display_index ?? uid,
             outletName: e.extensions?.outlet_name || e.outletName || e.outlet_name || (typeof e.outlet === 'string' ? e.outlet : '') || '',
             outlet: e.outlet_name || e.outletName || (typeof e.outlet === 'string' ? e.outlet : '') || '',
             group: e.group || '',
@@ -160,6 +166,21 @@ async function requestWorldInfo(operation, body) {
         throw new Error(`HTTP ${response.status}${detail ? ` (${detail})` : ''}`);
     }
     return response;
+}
+
+function queueLorebookWrite(write) {
+    const result = _lorebookWrites.then(write);
+    _lorebookWrites = result.catch(() => {});
+    return result;
+}
+
+export function editWorldInfoBook(name, edit) {
+    return queueLorebookWrite(async () => {
+        const data = await (await requestWorldInfo('get', { name })).json();
+        const entry = edit(data);
+        await saveWorldInfoBook(name, data);
+        return { data, entry };
+    });
 }
 
 export async function saveWorldInfoBook(name, data) {
@@ -529,6 +550,7 @@ export function parseLBChangesFromText(text) {
         const data = JSON.parse(raw);
         if (Array.isArray(data.changes)) return _sanitizeLBChanges(data.changes);
     } catch (_) {}
+    if (!strict) return null;
     // repair common issues
     try {
         const repaired = repairJSON(raw);
@@ -773,9 +795,7 @@ export function logLBHistoryChanges(changes, statusStr, afterMsgId = null) {
 }
 
 export function applyLBChanges(changes, afterMsgId = null) {
-    const result = _proposalWrites.then(() => applyProposalChanges(changes, afterMsgId));
-    _proposalWrites = result.catch(() => {});
-    return result;
+    return queueLorebookWrite(() => applyProposalChanges(changes, afterMsgId));
 }
 
 async function applyProposalChanges(changes, afterMsgId) {
