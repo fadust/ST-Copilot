@@ -34,7 +34,7 @@ import { DEFAULT_SYSTEM_PROMPT } from './default-prompts.js';
 import { escHtml } from './utils/util-dom.js';
 import { getUserPersona } from './utils/util-st.js';
 import { getCurrentSession, parseChatPickKey } from './session.js';
-import { applyRegexIfEnabled, buildLorebookContextBlock, buildLBAIInstructions } from './features/feature-lorebook-engine.js';
+import { applyRegexIfEnabled, buildLorebookContextBlock, buildLBAIInstructions, buildEntryCommandContext } from './features/feature-lorebook-engine.js';
 import { buildDirectorContextBlock, DIRECTOR_ANSWER_RULES } from './features/feature-director-context.js';
 import { buildCharacterContextBlock, buildCharEditAIInstructions, buildChatEditAIInstructions } from './features/feature-character-engine.js';
 import { mergeContent } from './features/feature-attachments.js';
@@ -177,7 +177,7 @@ export function getMainChatSlice(depth, includeInlineSummaryOriginals = false) {
     return ctx.chat.slice(-depth).flatMap((message, index) =>
         getMainChatMessageEntries(message, total - depth + index, includeInlineSummaryOriginals));
 }
-export async function buildSystemContent(settings) {
+export async function buildSystemContent(settings, query) {
     const parts = [settings.systemPrompt || DEFAULT_SYSTEM_PROMPT];
     const charInfo = getCharInfo();
     const ctx = SillyTavern.getContext();
@@ -203,6 +203,8 @@ export async function buildSystemContent(settings) {
 
     const lbBlock = await buildLorebookContextBlock(settings);
     if (lbBlock) parts.push(lbBlock);
+    const entrySettings = await buildEntryCommandContext(settings, query);
+    if (entrySettings) parts.push(entrySettings);
 
     const aiInstructions = buildLBAIInstructions(settings).trim();
     const charEditDirective = buildCharEditAIInstructions(settings).trim();
@@ -304,7 +306,7 @@ export function _buildAiContextForHistoryMsg(msg) {
 export async function assembleMessages(session, settings, pendingUserText, pendingAtts = null) {
     const directorQuery = pendingUserText || session.messages?.findLast(message => message.role === 'user')?.content;
     const directorBlock = buildDirectorContextBlock(settings, directorQuery);
-    const system = await buildSystemContent(settings);
+    const system = await buildSystemContent(settings, directorQuery);
     const messages = [{ role: 'system', content: directorBlock ? `${system}\n\n${DIRECTOR_ANSWER_RULES}` : system }];
     const plotTrackerBlock = buildPlotTrackerContextBlock(settings);
     if (plotTrackerBlock) {
@@ -446,7 +448,7 @@ export function setLastInspectorMessages(messages) { _lastInspectorMessages = me
 // persistent_memory / tool_calls_system, since this fork doesn't have
 // the Persistent Memory or Tool Calls features.
 const _CTX_KNOWN_TAGS = new Set([
-    'character_information', 'lorebook_context', 'st_system_prompt',
+    'character_information', 'lorebook_context', 'lorebook_entry_settings', 'st_system_prompt',
     'lorebook_management', 'character_management', 'chat_messages_editing',
     'roleplay_context', 'entity_definitions', 'persona_configuration', 'operational_guidelines',
 ]);
@@ -467,6 +469,7 @@ export function _ctxSectionKey(tagName) {
 
 const _CTX_SECTION_LABELS = {
     'lorebook_context': 'Lorebook',
+    'lorebook_entry_settings': 'Lorebook Entry Settings',
     'character_information': 'Character',
     'user_persona': 'User Persona',
     'lorebook_management': 'Lorebook Management',
@@ -596,6 +599,7 @@ function _buildSystemInspectorBlocks(raw, blockId) {
         { key: 'character_information', label: 'Character', className: 'character', pattern: /^<character_information>\r?$/m },
         { key: 'user_persona', label: 'User Persona', className: 'persona', pattern: /^<[^<>]*_persona>\r?$/m },
         { key: 'lorebook_context', label: 'Lorebook', className: 'lorebook', pattern: /^<lorebook_context>\r?$/m },
+        { key: 'lorebook_entry_settings', label: 'Lorebook Entry Settings', className: 'lorebook', pattern: /^<lorebook_entry_settings>\r?$/m },
         { key: 'character_management', label: 'Character Card AI Edits', className: 'module', pattern: /^<character_management>\r?$/m },
         { key: 'lorebook_management', label: 'Lorebook AI Edits', className: 'module', pattern: /^<lorebook_management>\r?$/m },
         { key: 'chat_messages_editing', label: 'Chat Message AI Edits', className: 'module', pattern: /^<chat_messages_editing>\r?$/m },

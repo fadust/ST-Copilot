@@ -34,10 +34,10 @@ import {
     buildLorebookContextBlock, stripLBChangesBlock, resolveLBChangeTarget,
     logLBHistoryChanges, applyLBChanges, getWiCache as _getWiCache,
     clearWiCache, getLastActiveEntries as _getLastActiveEntries,
+    getEntryLayout, updateEntryLayout, setEntryField,
 } from './feature-lorebook-engine.js';
 import { openDiffModal, reconstructLBChangesBlock } from './feature-chatedit-engine.js';
 import { updateMsgCount as _updateMsgCount } from '../ui/ui-chat.js';
-import { getSTWorldInfo } from '../state.js';
 
 // ── Injected forward dep (see header note) ──────────────────────────────────
 let _applyCustomTheme = () => {};
@@ -64,7 +64,7 @@ export function renderProposalCard(changes, msgEl) {
     const editableChanges = changes.map(c => ({ ...c }));
     const itemStates = editableChanges.map(() => 'pending');
     let applying = false;
-    const actionLabels = { add: '+ Add', edit: '✎ Edit', patch: '✂ Patch', delete: '✕ Remove' };
+    const actionLabels = { add: '+ Add', edit: '✎ Edit', patch: '✂ Patch', delete: '✕ Remove', configure: 'Configure' };
 
     const card = document.createElement('div');
     card.className = 'scp-lb-proposal-card';
@@ -131,6 +131,7 @@ export function renderProposalCard(changes, msgEl) {
     const itemEls = [];
 
     editableChanges.forEach((c, ci) => {
+        const isConfigure = c.action === 'configure';
         const item = document.createElement('div');
         item.className = `scp-lb-proposal-item scp-lb-proposal-${c.action || 'edit'}`;
 
@@ -152,6 +153,7 @@ export function renderProposalCard(changes, msgEl) {
         const worldTrigger = document.createElement('button');
         worldTrigger.className = 'scp-lb-proposal-world-trigger';
         worldTrigger.type = 'button';
+        worldTrigger.disabled = isConfigure;
 
         const worldTriggerText = document.createElement('span');
         worldTriggerText.className = 'scp-lb-proposal-world-trigger-text';
@@ -162,7 +164,7 @@ export function renderProposalCard(changes, msgEl) {
         worldChevronEl.innerHTML = ICONS.chevron;
 
         worldTrigger.appendChild(worldTriggerText);
-        worldTrigger.appendChild(worldChevronEl);
+        if (!isConfigure) worldTrigger.appendChild(worldChevronEl);
 
         const worldPanel = document.createElement('div');
         worldPanel.className = 'scp-lb-proposal-world-panel';
@@ -330,7 +332,7 @@ export function renderProposalCard(changes, msgEl) {
 
         // Edit toggle
         let editToggleBtn = null;
-        if (c.action !== 'delete') {
+        if (c.action !== 'delete' && !isConfigure) {
             editToggleBtn = document.createElement('button');
             editToggleBtn.className = 'scp-lb-proposal-edit-toggle';
             editToggleBtn.title = 'Edit before applying'; editToggleBtn.textContent = '✎';
@@ -405,7 +407,36 @@ export function renderProposalCard(changes, msgEl) {
 
         // Preview / triggers
         let previewEl = null, triggersEl = null;
-        if (c.content) {
+        if (isConfigure) {
+            previewEl = document.createElement('div');
+            previewEl.className = 'scp-lb-proposal-preview scp-lb-configure-preview';
+            const labels = { listPosition: 'List position', strategy: 'Strategy', position: 'Position', depth: 'Depth', order: 'Order', probability: 'Trigger chance' };
+            const positionOptions = document.getElementById('scp-lb-entry-position')?.options;
+            const format = (key, value) => {
+                if (key === 'probability') return `${value}%`;
+                if (key === 'position' && positionOptions) return Array.from(positionOptions).find(option => option.value === value)?.textContent ?? value;
+                return typeof value === 'string' ? value[0].toUpperCase() + value.slice(1) : value;
+            };
+            const renderSettings = (current = {}) => {
+                previewEl.replaceChildren(...Object.entries(c.layout).map(([key, value]) => {
+                    const row = document.createElement('div');
+                    const prior = current[key] === undefined ? '' : `${format(key, current[key])} → `;
+                    row.textContent = `${labels[key]}: ${prior}${format(key, value)}`;
+                    return row;
+                }));
+            };
+            renderSettings();
+            resolveLBChangeTarget(c, true).then(({ data, origEntry }) => {
+                if (origEntry) {
+                    renderSettings({ ...getEntryLayout(origEntry), listPosition: wiEntriesToArray(data).indexOf(origEntry) + 1 });
+                } else {
+                    worldTriggerText.textContent += ' ⚠';
+                    applyItemBtn.disabled = true;
+                    applyItemBtn.title = 'Entry not found in the selected lorebook';
+                }
+            }).catch(() => {});
+            item.appendChild(previewEl);
+        } else if (c.content) {
             previewEl = document.createElement('div');
             previewEl.className = 'scp-lb-proposal-preview';
             const isLong = c.content.length > 120;
@@ -440,7 +471,7 @@ export function renderProposalCard(changes, msgEl) {
         }
 
         // Inline edit panel
-        if (c.action !== 'delete') {
+        if (c.action !== 'delete' && !isConfigure) {
             const editPanel = document.createElement('div');
             editPanel.className = 'scp-lb-proposal-edit-panel';
             editPanel.style.display = 'none';
@@ -906,20 +937,15 @@ export function cycleEntryOverride(bookName, entry, rowEl) {
     _updateMsgCount(getCurrentSession());
 }
 
-function entryStrategy(entry) {
-    if (entry.constant === true) return 'constant';
-    return entry.vectorized === true ? 'vectorized' : 'normal';
-}
-
 const entrySortValue = {
-    strategy: entry => ({ normal: 'Normal', constant: 'Constant', vectorized: 'Vectorized' })[entryStrategy(entry)],
-    depth: entry => Number(entry.depth ?? 4),
-    order: entry => Number(entry.order ?? 100),
-    probability: entry => entry.useProbability === false ? 100 : Number(entry.probability ?? 100),
+    strategy: entry => ({ normal: 'Normal', constant: 'Constant', vectorized: 'Vectorized' })[getEntryLayout(entry).strategy],
+    depth: entry => getEntryLayout(entry).depth,
+    order: entry => getEntryLayout(entry).order,
+    probability: entry => getEntryLayout(entry).probability,
 };
 
 const entryControlIds = {
-    list: 'scp-lb-list-position', strategy: 'scp-lb-entry-strategy', position: 'scp-lb-entry-position',
+    listPosition: 'scp-lb-list-position', strategy: 'scp-lb-entry-strategy', position: 'scp-lb-entry-position',
     depth: 'scp-lb-entry-depth', order: 'scp-lb-entry-order', probability: 'scp-lb-entry-probability',
 };
 
@@ -929,11 +955,6 @@ function entryControls() {
 
 function syncEntryDepth(controls) {
     controls.depth.disabled = controls.position.disabled || !controls.position.value.startsWith('4:');
-}
-
-function setEntryField(data, entry, field, value, nativeField = field) {
-    entry[field] = value;
-    getSTWorldInfo()?.setWIOriginalDataValue?.(data, entry.uid, nativeField, value);
 }
 
 export function showEntryDetail(entry, bookName, data = _getWiCache()[bookName]) {
@@ -948,17 +969,12 @@ export function showEntryDetail(entry, bookName, data = _getWiCache()[bookName])
     document.getElementById('scp-lb-detail-content').value = entry.content || '';
     const controls = entryControls();
     const ordered = wiEntriesToArray(data);
-    const position = Number(entry.position ?? 0);
     const readOnly = bookName === EMBEDDED_BOOK_KEY;
     const values = {
-        list: ordered.findIndex(item => String(item.uid) === String(entry.uid)) + 1,
-        strategy: entryStrategy(entry),
-        position: position === 4 ? `4:${entry.role ?? 0}` : position,
-        depth: entrySortValue.depth(entry),
-        order: entrySortValue.order(entry),
-        probability: entrySortValue.probability(entry),
+        listPosition: ordered.findIndex(item => String(item.uid) === String(entry.uid)) + 1,
+        ...getEntryLayout(entry),
     };
-    controls.list.max = String(ordered.length);
+    controls.listPosition.max = String(ordered.length);
     for (const [field, input] of Object.entries(controls)) {
         input.value = String(values[field]);
         input.dataset.savedValue = input.value;
@@ -1022,7 +1038,7 @@ export async function saveEntryDetail() {
     for (const [field, input] of Object.entries(entryControls())) {
         if (input.disabled || input.value === input.dataset.savedValue) continue;
         if (!input.reportValidity()) return;
-        layout[field] = input.value;
+        layout[field] = input.type === 'number' ? input.valueAsNumber : input.value;
     }
     const name = document.getElementById('scp-lb-detail-name').value;
     const keys = document.getElementById('scp-lb-detail-triggers').value.split(',').map(key => key.trim()).filter(Boolean);
@@ -1033,35 +1049,7 @@ export async function saveEntryDetail() {
             const entry = data?.entries?.[sourceEntry.uid];
             if (!entry) throw new Error('This entry no longer exists. Refresh the lorebook list.');
 
-            if (layout.list !== undefined) {
-                const ordered = wiEntriesToArray(data);
-                const index = Number(layout.list) - 1;
-                if (index >= ordered.length) throw new Error(`List position must be between 1 and ${ordered.length}.`);
-                const currentIndex = ordered.indexOf(entry);
-                if (currentIndex !== index) {
-                    ordered.splice(currentIndex, 1);
-                    ordered.splice(index, 0, entry);
-                    ordered.forEach((item, displayIndex) => {
-                        if (item.displayIndex !== displayIndex) setEntryField(data, item, 'displayIndex', displayIndex, 'extensions.display_index');
-                    });
-                }
-            }
-            if (layout.strategy !== undefined) {
-                setEntryField(data, entry, 'constant', layout.strategy === 'constant');
-                setEntryField(data, entry, 'vectorized', layout.strategy === 'vectorized', 'extensions.vectorized');
-            }
-            if (layout.position !== undefined) {
-                const [position, role] = layout.position.split(':').map(Number);
-                setEntryField(data, entry, 'position', position, 'extensions.position');
-                setEntryField(data, entry, 'role', position === 4 ? role : null, 'extensions.role');
-                getSTWorldInfo()?.setWIOriginalDataValue?.(data, entry.uid, 'position', position === 0 ? 'before_char' : 'after_char');
-            }
-            if (layout.depth !== undefined) setEntryField(data, entry, 'depth', Number(layout.depth), 'extensions.depth');
-            if (layout.order !== undefined) setEntryField(data, entry, 'order', Number(layout.order), 'insertion_order');
-            if (layout.probability !== undefined) {
-                setEntryField(data, entry, 'probability', Number(layout.probability), 'extensions.probability');
-                setEntryField(data, entry, 'useProbability', true, 'extensions.useProbability');
-            }
+            if (Object.keys(layout).length) updateEntryLayout(data, entry, layout);
             if (name !== (sourceEntry.comment || '')) setEntryField(data, entry, 'comment', name);
             if (keys.join(', ') !== (sourceEntry.key || []).join(', ')) setEntryField(data, entry, 'key', keys, 'keys');
             if (content !== (sourceEntry.content || '')) setEntryField(data, entry, 'content', content);

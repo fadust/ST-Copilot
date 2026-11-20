@@ -33,7 +33,7 @@ import { escHtml } from '../utils/util-dom.js';
 import { getSTWorldInfo, getSTUtils } from '../state.js';
 import { getSettings, saveSettings } from '../settings.js';
 import { getCurrentSession, addMessage, saveSessionsToMetadata, getEffectiveSettings } from '../session.js';
-import { DEFAULT_LB_MANAGE_PROMPT, LB_FORMAT_BLOCK } from '../default-prompts.js';
+import { DEFAULT_LB_MANAGE_PROMPT, LB_FORMAT_BLOCK, LB_CONFIGURE_RULES } from '../default-prompts.js';
 import { applySearchReplaceToField } from './feature-character-engine.js';
 import { recordStat, STAT } from './feature-stats.js';
 import { renderLBHistoryContent as _renderLBHistoryContent, appendLBHistoryEl as _appendLBHistoryEl } from './feature-chatedit-engine.js';
@@ -307,6 +307,102 @@ export function wiEntriesToArray(data) {
     return Object.values(data.entries).sort((a, b) => (a.displayIndex ?? a.uid) - (b.displayIndex ?? b.uid));
 }
 
+export function getEntryLayout(entry) {
+    const position = Number(entry.position ?? 0);
+    return {
+        strategy: entry.constant ? 'constant' : entry.vectorized ? 'vectorized' : 'normal',
+        position: position === 4 ? `4:${entry.role ?? 0}` : String(position),
+        depth: Number(entry.depth ?? 4),
+        order: Number(entry.order ?? 100),
+        probability: entry.useProbability === false ? 100 : Number(entry.probability ?? 100),
+    };
+}
+
+export function setEntryField(data, entry, field, value, nativeField = field) {
+    entry[field] = value;
+    getSTWorldInfo()?.setWIOriginalDataValue?.(data, entry.uid, nativeField, value);
+}
+
+const numberInRange = (value, min, max) => Number.isFinite(value) && value >= min && value <= max;
+const layoutFields = {
+    listPosition: value => value === 'first' || value === 'last' || (Number.isInteger(value) && value >= 1),
+    strategy: value => ['normal', 'constant', 'vectorized'].includes(value),
+    position: value => typeof value === 'string' && /^(?:[0-3]|[5-7]|4:[0-2])$/.test(value),
+    depth: value => Number.isInteger(value) && numberInRange(value, 0, 9999),
+    order: value => Number.isInteger(value) && numberInRange(value, 0, 9999),
+    probability: value => numberInRange(value, 0, 100),
+};
+
+function normalizeLayout(layout) {
+    if (!layout || typeof layout !== 'object' || Array.isArray(layout)) return null;
+    const fields = Object.entries(layout);
+    return fields.length && fields.every(([key, value]) => Object.hasOwn(layoutFields, key) && layoutFields[key](value))
+        ? Object.fromEntries(fields) : null;
+}
+
+export function updateEntryLayout(data, entry, settings) {
+    const layout = normalizeLayout(settings);
+    if (!layout) throw new Error('Invalid entry settings.');
+    const position = layout.position ?? getEntryLayout(entry).position;
+    if (layout.depth !== undefined && !position.startsWith('4:')) {
+        throw new Error('Choose an At depth position before changing Depth.');
+    }
+    if (layout.listPosition !== undefined) {
+        const ordered = wiEntriesToArray(data);
+        const current = ordered.indexOf(entry);
+        const index = layout.listPosition === 'first' ? 0
+            : layout.listPosition === 'last' ? ordered.length - 1 : layout.listPosition - 1;
+        if (index >= ordered.length) throw new Error(`List position must be between 1 and ${ordered.length}.`);
+        if (current !== index) {
+            ordered.splice(current, 1);
+            ordered.splice(index, 0, entry);
+            ordered.forEach((item, displayIndex) => {
+                if (item.displayIndex !== displayIndex) setEntryField(data, item, 'displayIndex', displayIndex, 'extensions.display_index');
+            });
+        }
+    }
+    if (layout.strategy !== undefined) {
+        setEntryField(data, entry, 'constant', layout.strategy === 'constant');
+        setEntryField(data, entry, 'vectorized', layout.strategy === 'vectorized', 'extensions.vectorized');
+    }
+    if (layout.position !== undefined) {
+        const [slot, role] = position.split(':').map(Number);
+        setEntryField(data, entry, 'position', slot, 'extensions.position');
+        setEntryField(data, entry, 'role', slot === 4 ? role : null, 'extensions.role');
+        getSTWorldInfo()?.setWIOriginalDataValue?.(data, entry.uid, 'position', slot === 0 ? 'before_char' : 'after_char');
+    }
+    if (layout.depth !== undefined) setEntryField(data, entry, 'depth', layout.depth, 'extensions.depth');
+    if (layout.order !== undefined) setEntryField(data, entry, 'order', layout.order, 'insertion_order');
+    if (layout.probability !== undefined) {
+        setEntryField(data, entry, 'probability', layout.probability, 'extensions.probability');
+        setEntryField(data, entry, 'useProbability', true, 'extensions.useProbability');
+    }
+}
+
+export async function buildEntryCommandContext(settings, query) {
+    if (!settings.lorebookAIManageEnabled || typeof query !== 'string') return '';
+    const settingsRequest = /\b(?:lorebook|world info|trigger|chance|probability|order|priority|depth|strategy|constant|vectorized|reorder|position)\b/i.test(query);
+    const moveRequest = /\b(?:move|put|place)\b/i.test(query) && /\b(?:top|bottom|before|after|first|last)\b/i.test(query);
+    if (!settingsRequest && !moveRequest) return '';
+
+    const books = getActiveLorebookNames().filter(name => !(settings.lorebookExcludedBooks || []).includes(name));
+    const text = query.toLowerCase();
+    const matches = await Promise.all(books.map(async name => {
+        const ordered = wiEntriesToArray(await fetchWorldInfoBook(name));
+        const entries = ordered.flatMap((entry, index) => {
+            const title = (entry.comment || `Entry #${entry.uid}`).trim();
+            const target = title.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            if (!target || !new RegExp(`(?:^|[^\\p{L}\\p{N}_])${target}(?=$|[^\\p{L}\\p{N}_])`, 'u').test(text)) return [];
+            return [{ uid: entry.uid, name: title, ...getEntryLayout(entry), listPosition: index + 1 }];
+        });
+        return entries.length ? { book: name, count: ordered.length, entries: entries.slice(0, 30) } : null;
+    }));
+    const found = matches.filter(Boolean);
+    if (!found.length) return '';
+    const data = JSON.stringify(found).replaceAll('<', '\\u003c');
+    return `<lorebook_entry_settings>\n${data}\n</lorebook_entry_settings>`;
+}
+
 export function keywordMatchEntry(keys, text) {
     if (!keys?.length || !text) return false;
     const lower = text.toLowerCase();
@@ -495,7 +591,7 @@ export function buildLBAIInstructions(settings) {
         .replace('{{active_lorebooks}}', activeBooksStr)
         .replace('{{lorebook_output}}', LB_FORMAT_BLOCK);
         
-    return `<lorebook_management>\n${prompt}\n</lorebook_management>`;
+    return `<lorebook_management>\n${prompt}\n\n${LB_CONFIGURE_RULES}\n</lorebook_management>`;
 }
 
 export async function expandOutletsAsync(text, depth = 0) {
@@ -582,6 +678,14 @@ export function _sanitizeLBChanges(changes) {
     const valid = [];
     for (const c of changes) {
         if (!c || typeof c !== 'object') continue;
+        if (c.action === 'configure') {
+            const layout = normalizeLayout(c.layout);
+            if (layout && typeof c.worldName === 'string' && c.worldName.trim()
+                && Number.isInteger(c.uid) && c.uid >= 0 && typeof c.name === 'string' && c.name.trim()) {
+                valid.push({ action: c.action, worldName: c.worldName, uid: c.uid, name: c.name, layout });
+            }
+            continue;
+        }
         if (!['add', 'edit', 'patch', 'delete'].includes(c.action)) continue;
         if (!c.worldName && !c.name && c.uid == null) continue;
         if (c.triggers === 'original' || c.triggers === 'keep' || c.triggers === undefined || c.triggers === null) {
@@ -697,6 +801,10 @@ export async function resolveLBChangeTarget(change, strictBook = false, loadBook
         const entries = Object.values(data.entries);
         const entryName = entry => (entry.comment || `Entry #${entry.uid}`).trim().toLowerCase();
         origEntry = targetUid == null ? null : entries.find(entry => String(entry.uid) === String(targetUid));
+        if (change.action === 'configure') {
+            if (origEntry && entryName(origEntry) !== fuzzyName) origEntry = null;
+            return { bookName, data, origEntry };
+        }
         if (!origEntry && fuzzyName && (!strictBook || targetUid == null)) {
             origEntry = entries.find(entry => entryName(entry) === fuzzyName);
             if (!origEntry && !strictBook) {
@@ -821,7 +929,7 @@ async function applyProposalChanges(changes, afterMsgId) {
             const { bookName, data, origEntry } = await resolveLBChangeTarget(change, Boolean(change.worldName), loadBook);
             if (!bookName || !data?.entries) throw new Error(`Lorebook "${change.worldName || '(unspecified)'}" was not found.`);
             if (data._embedded) throw new Error('Choose an external lorebook. Embedded character books are read-only here.');
-            if (!['add', 'edit', 'patch', 'delete'].includes(change.action)) throw new Error(`Unknown action "${change.action}".`);
+            if (!['add', 'edit', 'patch', 'delete', 'configure'].includes(change.action)) throw new Error(`Unknown action "${change.action}".`);
             if (change.action !== 'add' && !origEntry) {
                 throw new Error(`Entry not found in "${bookName}". Create the entry first or select the correct entry.`);
             }
@@ -830,6 +938,8 @@ async function applyProposalChanges(changes, afterMsgId) {
                 addProposalEntry(data.entries, change);
             } else if (change.action === 'delete') {
                 delete data.entries[origEntry.uid];
+            } else if (change.action === 'configure') {
+                updateEntryLayout(data, origEntry, change.layout);
             } else {
                 updateProposalEntry(origEntry, change);
             }

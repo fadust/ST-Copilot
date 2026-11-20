@@ -28,7 +28,8 @@ globalThis.fetch = async (path, { body }) => {
     return Response.json(books.get(name) ?? { entries: {} });
 };
 
-const { applyLBChanges } = await import('../features/feature-lorebook-engine.js');
+const { applyLBChanges, clearWiCache, parseLBChangesFromText } = await import('../features/feature-lorebook-engine.js');
+const { assembleMessages } = await import('../api.js');
 const { setSTWorldInfo } = await import('../state.js');
 setSTWorldInfo({ selected_world_info: ['Cast', 'Other'], worldInfoCache: nativeCache });
 
@@ -40,6 +41,7 @@ beforeEach(() => {
     books.set('Cast', { entries: {} });
     books.set('Other', { entries: {} });
     nativeCache.clear();
+    clearWiCache();
     writes = [];
     failures = [];
     saves = new Map();
@@ -104,4 +106,58 @@ test('concurrent callbacks can add separate entries without losing either one', 
     const results = await Promise.all([applyLBChanges([add]), applyLBChanges([second])]);
     assert.deepEqual(results.map(result => [...result]), [[add], [second]]);
     assert.deepEqual(Object.values(books.get('Cast').entries).map(entry => entry.comment), ['Rook', 'Finch']);
+});
+
+const janus = { uid: 8, comment: 'Janus', key: ['Janus'], content: 'Keeper of the gate.', displayIndex: 5, order: 100 };
+const configure = {
+    action: 'configure', worldName: 'Cast', uid: 8, name: 'Janus',
+    layout: { listPosition: 'first', strategy: 'vectorized', position: '4:1', depth: 0, order: 120, probability: 35 },
+};
+
+test('chat assembly supplies the exact matched entry and current settings without supplying its content', async () => {
+    books.get('Cast').entries[8] = { ...janus };
+    books.get('Cast').entries[1] = { uid: 1, comment: 'Maris', displayIndex: 0 };
+    books.get('Other').entries[8] = { ...janus };
+    const messages = await assembleMessages(
+        { messages: [{ role: 'user', content: 'Move Janus to the top and set his trigger chance to 35%.' }] },
+        { lorebookAIManageEnabled: true, lorebookExcludedBooks: ['Other'] },
+        null,
+    );
+    const system = messages[0].content;
+    const context = JSON.parse(system.match(/<lorebook_entry_settings>\n(.*)\n<\/lorebook_entry_settings>/)[1]);
+    assert.deepEqual(context, [{ book: 'Cast', count: 2, entries: [
+        { uid: 8, name: 'Janus', strategy: 'normal', position: '0', depth: 4, order: 100, probability: 100, listPosition: 2 },
+    ] }]);
+    assert.match(system, /"action":"configure"/);
+    assert.doesNotMatch(system, /Keeper of the gate/);
+    assert.deepEqual(writes, []);
+});
+
+test('a settings proposal changes only native settings and display indexes when applied', async () => {
+    books.get('Cast').entries[8] = { ...janus };
+    books.get('Cast').entries[1] = { uid: 1, comment: 'Maris', displayIndex: 0 };
+    const reply = '\x60\x60\x60lorebook-changes\n' + JSON.stringify({ changes: [
+        { ...configure, content: 'Unrequested rewrite', triggers: ['unrequested'] },
+    ] }) + '\n\x60\x60\x60';
+    const pending = parseLBChangesFromText(reply);
+    assert.deepEqual(pending, [configure]);
+    assert.deepEqual(writes, []);
+    assert.deepEqual([...await applyLBChanges(pending)], pending);
+    assert.deepEqual(writes, ['Cast']);
+    assert.deepEqual(books.get('Cast').entries[8], {
+        ...janus, displayIndex: 0, constant: false, vectorized: true, position: 4, role: 1,
+        depth: 0, order: 120, probability: 35, useProbability: true,
+    });
+    assert.deepEqual(books.get('Cast').entries[1], { uid: 1, comment: 'Maris', displayIndex: 1 });
+});
+
+test('configuration requires exact book entry identity and validates the whole layout before writing', async () => {
+    books.get('Cast').entries[8] = { ...janus, comment: 'Finch' };
+    books.get('Other').entries[8] = { ...janus };
+    assert.equal((await applyLBChanges([configure])).size, 0);
+    books.get('Cast').entries[8] = { ...janus };
+    assert.equal((await applyLBChanges([{ ...configure, layout: { listPosition: 9, probability: 0 } }])).size, 0);
+    assert.equal((await applyLBChanges([{ ...configure, layout: { depth: 3 } }])).size, 0);
+    assert.deepEqual(books.get('Cast').entries[8], janus);
+    assert.deepEqual(writes, []);
 });
