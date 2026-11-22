@@ -30,7 +30,7 @@
  */
 
 import { EXT_DISPLAY } from './constants.js';
-import { DEFAULT_SYSTEM_PROMPT, LB_CONTEXT_INSTRUCTIONS } from './default-prompts.js';
+import { COPILOT_CAPABILITIES, DEFAULT_SYSTEM_PROMPT, LB_CONTEXT_INSTRUCTIONS } from './default-prompts.js';
 import { escHtml } from './utils/util-dom.js';
 import { getUserPersona } from './utils/util-st.js';
 import { getCurrentSession, parseChatPickKey } from './session.js';
@@ -177,8 +177,15 @@ export function getMainChatSlice(depth, includeInlineSummaryOriginals = false) {
     return ctx.chat.slice(-depth).flatMap((message, index) =>
         getMainChatMessageEntries(message, total - depth + index, includeInlineSummaryOriginals));
 }
-export async function buildSystemContent(settings, query) {
-    const parts = [settings.systemPrompt || DEFAULT_SYSTEM_PROMPT];
+export async function buildSystemContent(settings, query, directorBlock = '') {
+    const lorebookEditing = settings.lorebookAIManageEnabled
+        ? 'AI Lorebook Editing is enabled. You can propose changes to entry content or settings, including list reorders. Identify the entry by its UID or unique exact title in the named book.'
+        : 'AI Lorebook Editing is off for this request. Point the user to Lorebook Manager for manual changes or to Enable AI Lorebook Editing to request proposals.';
+    const directorContext = directorBlock
+        ? 'Narrator Director context is supplied. You can reference the established scene and selected recorded facts for the active chat.'
+        : 'Copilot can read the established scene and selected recorded facts when Narrator Director is active and included in context. No Director records are supplied for this request.';
+    const capabilities = `<copilot_capabilities>\n${COPILOT_CAPABILITIES}\n- ${lorebookEditing}\n- ${directorContext}\n</copilot_capabilities>`;
+    const parts = [settings.systemPrompt || DEFAULT_SYSTEM_PROMPT, capabilities];
     const charInfo = getCharInfo();
     const ctx = SillyTavern.getContext();
 
@@ -306,7 +313,7 @@ export function _buildAiContextForHistoryMsg(msg) {
 export async function assembleMessages(session, settings, pendingUserText, pendingAtts = null) {
     const directorQuery = pendingUserText || session.messages?.findLast(message => message.role === 'user')?.content;
     const directorBlock = buildDirectorContextBlock(settings, directorQuery);
-    const system = await buildSystemContent(settings, directorQuery);
+    const system = await buildSystemContent(settings, directorQuery, directorBlock);
     const messages = [{ role: 'system', content: directorBlock ? `${system}\n\n${DIRECTOR_ANSWER_RULES}` : system }];
     const plotTrackerBlock = buildPlotTrackerContextBlock(settings);
     if (plotTrackerBlock) {

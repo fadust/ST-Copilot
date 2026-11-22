@@ -129,6 +129,7 @@ test('chat assembly supplies the exact matched entry and current settings withou
         { uid: 8, name: 'Janus', strategy: 'normal', position: '0', order: 100, probability: 100, listPosition: 2 },
     ] }]);
     assert.match(system, /"action":"configure"/);
+    assert.match(system, /AI Lorebook Editing is enabled/);
     assert.doesNotMatch(system, /Keeper of the gate/);
     assert.deepEqual(writes, []);
 });
@@ -186,6 +187,18 @@ test('read-only lookup uses current saved UIDs, with book and keyword matching',
     ]);
     assert.match(await buildEntryCommandContext({}, 'Which entry has UID #0 in Cast?'), /"uid":0/);
     assert.doesNotMatch(context, /Keeper of the gate/);
+    assert.deepEqual(writes, []);
+});
+
+test('UID help stays available with a saved custom prompt and AI editing turned off', async () => {
+    const settings = { systemPrompt: 'My custom Copilot prompt.', lorebookAIManageEnabled: false };
+    const [system] = await assembleMessages({ messages: [] }, settings, 'How can I see all lorebook UIDs?');
+    assert.ok(system.content.startsWith(`${settings.systemPrompt}\n<copilot_capabilities>`));
+    assert.match(system.content, /`\/uids` or `\/uids Book Name`/);
+    assert.match(system.content, /AI Lorebook Editing is off for this request/);
+    assert.match(system.content, /explain the UID directory and \/uids shortcut even if this request has no entry records/);
+    assert.match(system.content, /<lorebook_entry_settings>\n\[\]\n<\/lorebook_entry_settings>/);
+    assert.doesNotMatch(system.content, /<lorebook_management>/);
     assert.deepEqual(writes, []);
 });
 

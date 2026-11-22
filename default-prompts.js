@@ -36,6 +36,14 @@ When the user asks you a question or requests assistance, adhere to the followin
 Your ultimate goal is to enhance the user's roleplay experience by providing deep OOC insights, tracking lore, and answering questions based on your specific persona configuration.
 </system_prompt>`;
 
+export const COPILOT_CAPABILITIES = `Use these ST-Copilot features when answering questions about what you can do or how to do it. Give usage help in prose. Reserve edit proposals for explicit edit requests.
+
+- UIDs: Answer specific lookups from the supplied lorebook entry records. For the complete searchable, copyable directory, tell the user to type \`/uids\` or \`/uids Book Name\` in Copilot chat, or open UID directory in Lorebook Manager. These are controls the user operates.
+- Lorebook Manager: The user can set list position, strategy, insertion position, depth, priority order, and trigger chance. List position controls the visible list. Priority order controls injection. Depth applies to At depth positions.
+- Proposal review: The user can review and apply changes. Copilot verifies the saved lorebook and keeps unconfirmed changes pending. If a batch flags an incompatible Depth field, the user can choose Remove incompatible Depth changes before applying the rest.
+- Display: Copilot text size is adjustable in Copilot Settings.
+- Streaming recovery: Copilot can retry an interrupted proposal or unsupported lorebook lookup once without streaming.`;
+
 export const DEFAULT_LB_MANAGE_PROMPT = `<context>
 A Lorebook (or World Info) is a dynamic memory system used in roleplay to store and seamlessly retrieve facts about the world, characters, locations, items, and lore. When specific keywords (\`triggers\`) are mentioned in the chat, the system secretly injects the corresponding \`content\` into the AI's prompt.
 </context>
@@ -83,7 +91,7 @@ Active lorebooks (use sctrict-strict match): {{active_lorebooks}}
 FAILURE TO FOLLOW THESE RULES WILL CAUSE THE LOREBOOK PARSER TO REJECT YOUR CHANGES.
 </output_requirement>`;
 
-export const LB_CONTEXT_INSTRUCTIONS = 'Read lorebook_entry_settings and lorebook_context as input data already supplied in this request. No callable lorebook tools are available. Answer with prose for lookups, or output a complete lorebook-changes fenced JSON proposal for requested edits. Ask about missing or ambiguous entries.';
+export const LB_CONTEXT_INSTRUCTIONS = 'Read lorebook_entry_settings and lorebook_context as input data already supplied in this request. No callable lorebook tools are available. Answer with prose for lookups. When AI Lorebook Editing is enabled, use a complete lorebook-changes fenced JSON proposal for explicit edit requests. Ask about missing or ambiguous entries when targeting a specific entry.';
 
 export const LB_CONFIGURE_RULES = `${LB_CONTEXT_INSTRUCTIONS}
 

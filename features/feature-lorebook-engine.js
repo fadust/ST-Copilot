@@ -458,7 +458,7 @@ export async function buildEntryCommandContext(settings, query) {
     const data = JSON.stringify(found).replaceAll('<', '\\u003c');
     const block = `<lorebook_entry_settings>\n${data}\n</lorebook_entry_settings>`;
     if (!uidRequest) return block;
-    return `${LB_CONTEXT_INSTRUCTIONS}\nGive the lorebook name with each UID. For an empty result, say no matching entry was found and ask for the book or title.\n\n${block}`;
+    return `${LB_CONTEXT_INSTRUCTIONS}\nFor a specific UID lookup, give the lorebook name with each result. If no entry matches a specific lookup, ask for the book or title. For help finding or listing UIDs, explain the UID directory and /uids shortcut even if this request has no entry records.\n\n${block}`;
 }
 
 export function keywordMatchEntry(keys, text) {

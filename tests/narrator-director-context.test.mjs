@@ -98,9 +98,11 @@ test('normal request assembly and Context Inspector use the same Director block'
     const messages = await assembleMessages(session, { contextDepth: 0 }, null);
     assert.equal(messages.filter(message => message.content.startsWith('<narrator_director>')).length, 1);
     assert.match(messages[1].content, /Rook returned the gate key/);
+    assert.match(messages[0].content, /Narrator Director context is supplied/);
     assert.ok(messages[0].content.includes(DIRECTOR_ANSWER_RULES));
     assert.match(buildContextInspectorHTML(messages), /scp-ctx-nav-user[^>]*>Narrator Director/);
     const disabled = await assembleMessages(session, { includeNarratorDirectorContext: false }, 'Rook');
     assert.ok(disabled.every(message => !message.content.startsWith('<narrator_director>')));
+    assert.match(disabled[0].content, /No Director records are supplied/);
     assert.ok(!disabled[0].content.includes(DIRECTOR_ANSWER_RULES));
 });
